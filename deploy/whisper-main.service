@@ -1,0 +1,12 @@
+[Unit]
+Description=whisper.cpp server (main question model)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/whisper.cpp/build/bin/whisper-server --model %h/whisper.cpp/models/ggml-base.en.bin --host 127.0.0.1 --port 8180 --threads 4
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

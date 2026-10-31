@@ -1,0 +1,12 @@
+[Unit]
+Description=whisper.cpp server (wake-word model)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/whisper.cpp/build/bin/whisper-server --model %h/whisper.cpp/models/ggml-tiny.en.bin --host 127.0.0.1 --port 8181 --threads 2
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

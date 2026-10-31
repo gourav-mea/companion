@@ -1,0 +1,15 @@
+[Unit]
+Description=Unplugged AI companion
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Makeathon-21
+ExecStart=/usr/bin/python3 %h/Makeathon-21/talk.py
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
