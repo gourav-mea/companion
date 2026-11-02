@@ -36,7 +36,12 @@ WHISPER_THREADS = 4
 
 # How long to wait for the wake-word listener to let go of the capture device
 # before recording anyway (only one process can hold ALSA at a time).
-MIC_HANDOVER_TIMEOUT = 3.0
+MIC_HANDOVER_TIMEOUT = 2.0
+# Lock files, not just in-process Events: CLI commands (test-voice, enroll)
+# run in a DIFFERENT process from the always-on service, so thread primitives
+# alone can't coordinate the handover.
+MIC_LOCK_FILE = os.path.join(WORK, "mic.lock")
+MIC_RELEASED_FILE = os.path.join(WORK, "mic.released")
 
 # If a transcript looks cut off mid-thought (no terminal punctuation, ends on
 # a dangling conjunction/preposition), listen briefly for the rest instead of

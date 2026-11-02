@@ -60,11 +60,12 @@ def openwakeword_loop(switch_enabled, drain_reminders, on_wake):
         return False
     import numpy as np
     while switch_enabled():
-        # Someone else wants the mic (a question, an admin enrollment): stay
-        # out of the way entirely rather than fighting over a busy device.
-        if state.mic_pause.is_set():
-            state.mic_released.set()
-            while state.mic_pause.is_set() and switch_enabled():
+        # Someone else wants the mic (a question, an admin enrollment, or a
+        # CLI command in another process): stay out of the way entirely
+        # rather than fighting over a busy capture device.
+        if capture.mic_requested():
+            capture.announce_mic_released()
+            while capture.mic_requested() and switch_enabled():
                 time.sleep(0.1)
             continue
         proc = subprocess.Popen(
@@ -74,7 +75,7 @@ def openwakeword_loop(switch_enabled, drain_reminders, on_wake):
         detected = False
         try:
             while switch_enabled():
-                if state.mic_pause.is_set():
+                if capture.mic_requested():
                     break   # drop the device; the outer loop signals and waits
                 drain_reminders()
                 if state.wake_event.is_set():

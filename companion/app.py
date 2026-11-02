@@ -26,6 +26,12 @@ from .web.face_server import lan_ip, make_qr, set_status, start_face_server
 def main():
     os.makedirs(config.WORK, exist_ok=True)
     bootstrap()
+    for stale in (config.MIC_LOCK_FILE, config.MIC_RELEASED_FILE):
+        if os.path.exists(stale):   # left behind by a crash; would deafen the wake word
+            try:
+                os.remove(stale)
+            except OSError:
+                pass
     start_face_server()
     start_admin_server()
     start_opportunity_worker()

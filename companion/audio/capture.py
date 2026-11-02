@@ -6,9 +6,33 @@ import contextlib
 import os
 import shutil
 import subprocess
+import time
 import wave
 
 from .. import config, state
+
+
+def _unlink(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def mic_requested():
+    """True if anything (this process or another) wants the capture device."""
+    return state.mic_pause.is_set() or os.path.exists(config.MIC_LOCK_FILE)
+
+
+def announce_mic_released():
+    """Called by the wake-word listener once it has actually dropped the
+    device, so the waiting recorder can proceed."""
+    state.mic_released.set()
+    try:
+        with open(config.MIC_RELEASED_FILE, "w") as f:
+            f.write(str(os.getpid()))
+    except OSError:
+        pass
 
 
 @contextlib.contextmanager
@@ -16,17 +40,30 @@ def mic_session(timeout=None):
     """Exclusive use of the capture device.
 
     The wake-word listener streams from the mic continuously, so a second
-    recorder would hit a busy ALSA device and silently capture nothing. This
-    asks the listener to let go first, then holds the lock for the duration.
+    recorder would hit a busy ALSA device and capture nothing. This asks the
+    listener to let go first -- via both a threading Event (same process) and
+    a lock file (CLI commands run in a separate process from the service).
     """
     timeout = config.MIC_HANDOVER_TIMEOUT if timeout is None else timeout
+    _unlink(config.MIC_RELEASED_FILE)
     state.mic_released.clear()
     state.mic_pause.set()
-    state.mic_released.wait(timeout)
+    try:
+        with open(config.MIC_LOCK_FILE, "w") as f:
+            f.write(str(os.getpid()))
+    except OSError:
+        pass
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if state.mic_released.is_set() or os.path.exists(config.MIC_RELEASED_FILE):
+            break
+        time.sleep(0.05)
     try:
         with state.mic_lock:
             yield
     finally:
+        _unlink(config.MIC_LOCK_FILE)
+        _unlink(config.MIC_RELEASED_FILE)
         state.mic_pause.clear()
         state.mic_released.clear()
 
