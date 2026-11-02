@@ -23,6 +23,32 @@ from .web.admin_server import start_admin_server
 from .web.face_server import lan_ip, make_qr, set_status, start_face_server
 
 
+def _report_optional_deps():
+    """Name the interpreter and every optional package that silently degrades
+    a whole feature when missing. Running the service under system python
+    while the deps live in a venv makes speaker ID return "guest" forever and
+    disables the VAD noise gate -- with no error anywhere obvious.
+    """
+    import sys
+    print(f"python: {sys.executable}")
+    missing = []
+    for module, feature in (("resemblyzer", "speaker recognition (personalization/memory)"),
+                            ("webrtcvad", "speech-vs-noise gate"),
+                            ("openwakeword", "fast wake word"),
+                            ("numpy", "fast wake word")):
+        try:
+            __import__(module)
+        except Exception:
+            missing.append(f"{module} -> {feature} DISABLED")
+    if missing:
+        print("MISSING OPTIONAL DEPENDENCIES:")
+        for line in missing:
+            print(f"  {line}")
+        print(f"  install into THIS interpreter: {sys.executable} -m pip install <package>")
+    else:
+        print("optional deps: all present (speaker id, vad, wake word)")
+
+
 def main():
     os.makedirs(config.WORK, exist_ok=True)
     bootstrap()
@@ -58,6 +84,7 @@ def main():
     player = pulse_player()
     out = f"pulse ({os.path.basename(player)})" if player else (config.APLAY_DEVICE or "alsa default")
     print(f"gpio: {'yes' if state.HAVE_GPIO else 'no'}  model: {current_model()}  audio-out: {out}")
+    _report_optional_deps()
     print("always listening. wake words:", ", ".join(config.WAKE_WORDS))
     print(f"face (open on any device on the LAN): {state.pi_url}")
     print("press the button to wake; say 'goodbye' to end a conversation.")

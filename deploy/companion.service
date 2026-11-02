@@ -6,7 +6,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h/Makeathon-21
-ExecStart=/usr/bin/python3 %h/Makeathon-21/talk.py
+# The venv interpreter, NOT /usr/bin/python3: resemblyzer/webrtcvad/openwakeword
+# are installed in the venv, and system python silently degrades without them
+# (speaker ID returns "guest" for everyone, the VAD noise gate does nothing).
+ExecStart=%h/Makeathon-21/venv/bin/python3 %h/Makeathon-21/talk.py
 Restart=on-failure
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1

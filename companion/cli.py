@@ -124,6 +124,35 @@ def doctor():
         shadow = "shadow mode ON" if config.OPPORTUNITY_SHADOW_MODE else "LIVE (speaking suggestions)"
         return f"{config.OPPORTUNITY_MODEL} -> {reply[:20]} ({shadow})"
 
+    def service_interpreter():
+        """doctor runs under whichever python you invoked it with -- which can
+        pass while the *service* runs a different one that lacks the deps."""
+        import subprocess
+        import sys
+        unit = os.path.expanduser("~/.config/systemd/user/companion.service")
+        if not os.path.exists(unit):
+            return f"no service installed (this python: {sys.executable})"
+        exec_path = ""
+        with open(unit) as f:
+            for line in f:
+                if line.startswith("ExecStart="):
+                    parts = line.strip().split("=", 1)[1].split()
+                    exec_path = parts[0] if parts else ""
+                    break
+        if not exec_path or not os.path.exists(exec_path):
+            raise RuntimeError(f"service ExecStart interpreter missing: {exec_path!r}")
+        probe = ("import importlib;"
+                 "print(','.join(m for m in ('resemblyzer','webrtcvad','openwakeword','numpy')"
+                 " if importlib.util.find_spec(m) is None))")
+        res = subprocess.run([exec_path, "-c", probe], capture_output=True, text=True, check=False)
+        absent = (res.stdout or "").strip()
+        if absent:
+            raise RuntimeError(
+                f"the service runs {exec_path}, which is MISSING: {absent}. "
+                f"Speaker ID and/or the noise gate are silently disabled there. "
+                f"Fix: point ExecStart at your venv python, or install these into {exec_path}")
+        return f"{exec_path} (all optional deps present)"
+
     def speech_gate():
         if not config.VAD_ENABLED:
             return "disabled (config.VAD_ENABLED = False)"
@@ -158,6 +187,7 @@ def doctor():
     check("admin password", admin_password)
     check("barge-in calibration", barge_in_calibration)
     check("speech gate (vad)", speech_gate)
+    check("service interpreter", service_interpreter)
     check("endpointing (sox)", endpointing)
     check("opportunity engine", opportunity_engine)
     print("\nfailures above are not fatal; the device degrades around them.")
