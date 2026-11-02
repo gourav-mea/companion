@@ -19,9 +19,39 @@ def _unlink(path):
         pass
 
 
+def _pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _lock_owner():
+    """PID currently claiming the mic, or None. Clears locks left behind by
+    a dead process so a crash can't deafen the wake word forever."""
+    try:
+        with open(config.MIC_LOCK_FILE) as f:
+            pid = int((f.read() or "0").strip())
+    except (OSError, ValueError):
+        return None
+    if pid and not _pid_alive(pid):
+        _unlink(config.MIC_LOCK_FILE)
+        return None
+    return pid or None
+
+
 def mic_requested():
-    """True if anything (this process or another) wants the capture device."""
-    return state.mic_pause.is_set() or os.path.exists(config.MIC_LOCK_FILE)
+    """True if *another* process wants the capture device.
+
+    Our own lock is ignored on purpose: inside one process the threading
+    lock already serialises access, and the service's own wake-word
+    recordings must not look like an external takeover request.
+    """
+    if state.mic_pause.is_set():
+        return True
+    owner = _lock_owner()
+    return owner is not None and owner != os.getpid()
 
 
 def announce_mic_released():
@@ -42,27 +72,40 @@ def mic_session(timeout=None):
     The wake-word listener streams from the mic continuously, so a second
     recorder would hit a busy ALSA device and capture nothing. This asks the
     listener to let go first -- via both a threading Event (same process) and
-    a lock file (CLI commands run in a separate process from the service).
+    a PID-stamped lock file (CLI commands run in a separate process from the
+    always-on service).
     """
     timeout = config.MIC_HANDOVER_TIMEOUT if timeout is None else timeout
+    owner = _lock_owner()
+    external = owner is not None and owner != os.getpid()
     _unlink(config.MIC_RELEASED_FILE)
     state.mic_released.clear()
     state.mic_pause.set()
-    try:
-        with open(config.MIC_LOCK_FILE, "w") as f:
-            f.write(str(os.getpid()))
-    except OSError:
-        pass
+    if not external:
+        try:
+            with open(config.MIC_LOCK_FILE, "w") as f:
+                f.write(str(os.getpid()))
+        except OSError:
+            pass
     deadline = time.time() + timeout
+    handed_over = False
     while time.time() < deadline:
         if state.mic_released.is_set() or os.path.exists(config.MIC_RELEASED_FILE):
+            handed_over = True
             break
         time.sleep(0.05)
+    if handed_over:
+        time.sleep(config.MIC_SETTLE_SECONDS)   # ALSA needs a beat to actually free the device
+    elif external:
+        print(f"mic: another process (pid {owner}) is holding the device and did not release it")
+    elif config.DEBUG_TIMING:
+        print("mic: no handover signal (nothing else was listening)")
     try:
         with state.mic_lock:
             yield
     finally:
-        _unlink(config.MIC_LOCK_FILE)
+        if not external and _lock_owner() == os.getpid():
+            _unlink(config.MIC_LOCK_FILE)
         _unlink(config.MIC_RELEASED_FILE)
         state.mic_pause.clear()
         state.mic_released.clear()

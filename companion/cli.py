@@ -289,9 +289,12 @@ def set_admin_password(password):
 def enroll_cli(name):
     """Enroll a voice from the CLI (no web UI, no voice command needed)."""
     bootstrap()
+    from .audio.capture import mic_session
 
     def record_fn(seconds, tag):
-        return record(seconds, denoise=False, tag=tag)
+        # Takes the mic from the running service's wake-word listener.
+        with mic_session():
+            return record(seconds, denoise=False, tag=tag, stop_on_silence=True)
 
     print(f"Enrolling '{name}'. Speak a short sentence when prompted.")
     ok, msg = enroll_user(name, record_fn, speak_fn=lambda t: print(f"  -> {t}"))

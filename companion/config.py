@@ -42,6 +42,7 @@ MIC_HANDOVER_TIMEOUT = 2.0
 # alone can't coordinate the handover.
 MIC_LOCK_FILE = os.path.join(WORK, "mic.lock")
 MIC_RELEASED_FILE = os.path.join(WORK, "mic.released")
+MIC_SETTLE_SECONDS = 0.4   # ALSA doesn't free the device the instant arecord is killed
 
 # If a transcript looks cut off mid-thought (no terminal punctuation, ends on
 # a dangling conjunction/preposition), listen briefly for the rest instead of
