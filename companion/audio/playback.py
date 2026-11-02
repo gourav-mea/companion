@@ -11,6 +11,9 @@ from .. import accessibility, config
 from . import capture
 
 _speak_lock = threading.Lock()
+# Public alias: the thinking cue holds this while playing a filler clip so it
+# obeys the same "serialise all speech" invariant speak() relies on.
+SPEAK_LOCK = _speak_lock
 
 
 def piper_ready():
@@ -53,20 +56,59 @@ def _play_raw(stdin_src, rate):
     return subprocess.Popen(cmd, stdin=stdin_src)
 
 
+def _file_player_cmd(path):
+    """The command to play a WAV file through the configured output/sink."""
+    player = pulse_player()
+    if player:
+        cmd = [player]
+        if config.PULSE_SINK:
+            cmd += [f"--target={config.PULSE_SINK}"] if player.endswith("pw-play") else [f"--device={config.PULSE_SINK}"]
+        cmd += [path]
+        return cmd
+    return _aplay_cmd([path])
+
+
+def start_file_player(path):
+    """Start playing a WAV file and return the player process WITHOUT waiting
+    (no barge-in handling). The caller owns the process and must wait() or
+    terminate() it -- used by the thinking cue, which has to be killable the
+    instant the real answer is ready."""
+    return subprocess.Popen(_file_player_cmd(path))
+
+
+def render_to_wav(text, path):
+    """Render `text` to a WAV at `path` in the companion voice (Piper, else
+    espeak-ng). Returns `path` on success or None. Used to pre-render the
+    thinking-cue phrases once so they play back instantly later."""
+    binary = piper_ready()
+    if binary:
+        try:
+            model_path = accessibility.piper_model_for_lang()
+            scale = accessibility.get_speech_scale()
+            subprocess.run([binary, "--model", model_path, "--output_file", path,
+                            "--length-scale", f"{scale:g}"],
+                           input=text.encode("utf-8"), check=False)
+            if os.path.exists(path) and os.path.getsize(path) > 0:
+                return path
+        except Exception as exc:
+            print("piper cue render failed, using espeak:", exc)
+    try:
+        rate = str(int(int(config.ESPEAK_RATE) / accessibility.get_speech_scale()))
+        voice = config.ESPEAK_LANG_VOICE.get(accessibility.get_lang(), config.ESPEAK_VOICE)
+        subprocess.run(["espeak-ng", "-v", voice, "-s", rate, "-w", path, text], check=False)
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            return path
+    except Exception:
+        pass
+    return None
+
+
 def _play_file_interruptible(path):
     """Barge-in-aware file playback (used by the espeak fallback, so
     interruption works even without Piper installed). Returns whether
     playback was cut short by a confirmed interruption."""
-    player = pulse_player()
     try:
-        if player:
-            cmd = [player]
-            if config.PULSE_SINK:
-                cmd += [f"--target={config.PULSE_SINK}"] if player.endswith("pw-play") else [f"--device={config.PULSE_SINK}"]
-            cmd += [path]
-        else:
-            cmd = _aplay_cmd([path])
-        proc = subprocess.Popen(cmd)
+        proc = subprocess.Popen(_file_player_cmd(path))
         return _bargein_wait(proc)
     except Exception:
         return False

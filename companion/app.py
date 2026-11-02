@@ -7,9 +7,10 @@ import shutil
 import threading
 import time
 
-from . import config, state
+from . import config, metrics, state
 from .accessibility import get_lang  # noqa: F401  (imported for side-effect-free availability check)
 from .audio.capture import record  # noqa: F401
+from .audio import thinking_cue
 from .audio.playback import piper_ready, pulse_player, speak
 from .audio.wakeword import hears_wake, openwakeword_loop
 from .bootstrap import bootstrap
@@ -90,6 +91,7 @@ def main():
     print(f"face (open on any device on the LAN): {state.pi_url}")
     print("press the button to wake; say 'goodbye' to end a conversation.")
     threading.Thread(target=warm_model, daemon=True).start()  # load model off the critical path
+    threading.Thread(target=thinking_cue.prewarm, daemon=True).start()  # pre-render cue clips off the critical path
     speak("Companion ready. Say, hi companion, or press the button.")
     try:
         while True:
@@ -109,6 +111,8 @@ def main():
                     state.switch_enabled, drain_reminders, conversation_mode):
                 continue   # openWakeWord handled waking until the toggle went off
             awake, heard = hears_wake()
+            if heard or awake:   # skip the many silent/energy-gated checks that heard nothing
+                metrics.log_wake(awake, heard, source="whisper")
             if heard:
                 print("heard:", heard)
             if awake:
@@ -134,6 +138,10 @@ def run_cli():
         cli.enroll_cli(" ".join(args[1:]) or "User")
     elif args and args[0] == "eval-opportunities":
         cli.eval_opportunities()
+    elif args and args[0] == "smoke-memory":
+        raise SystemExit(cli.smoke_memory())
+    elif args and args[0] == "metrics":
+        raise SystemExit(cli.metrics_cli(args[1:]))
     elif args and args[0] == "calibrate-noise":
         cli.calibrate_noise()
     elif args and args[0] == "test-mic":

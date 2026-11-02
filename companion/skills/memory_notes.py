@@ -19,7 +19,7 @@ from ..llm.client import chat, embed
 
 RECALL_HALF_LIFE_SECONDS = 14 * 24 * 3600   # a two-week-old note has half the recency weight
 SIMILARITY_SUPERSEDE_THRESHOLD = 0.92       # near-duplicate => treat as an update, not a new fact
-RECALL_CANDIDATES = 150                      # rows pulled from SQL before the in-Python rerank
+# recall candidate/result counts now live in config (RECALL_CANDIDATES, RECALL_TOP, ...)
 
 
 def _connect():
@@ -40,6 +40,16 @@ def _cosine(a, b):
 def _recency_weight(ts):
     age = max(0.0, time.time() - ts)
     return 0.5 ** (age / RECALL_HALF_LIFE_SECONDS)
+
+
+def _canonical_slot(attribute):
+    """Normalize a free-form attribute slot onto a canonical name so a later
+    correction to the same fact supersedes it instead of stacking a duplicate
+    under a different spelling ("city" vs "home_city")."""
+    if not attribute:
+        return None
+    a = attribute.strip().lower().replace(" ", "_")
+    return config.MEMORY_SLOT_ALIASES.get(a, a)
 
 
 class SQLiteMemoryStore:
@@ -161,6 +171,7 @@ class SQLiteMemoryStore:
         candidate = extractor.extract(question, answer)
         if candidate is None:
             return None
+        candidate.attribute = _canonical_slot(candidate.attribute)   # so corrections supersede, not stack
         vec = embed(candidate.text)
         existing = self.find_same_attribute(user_id, candidate.attribute) if candidate.attribute else None
         if existing is None or candidate.update_mode == "append":
@@ -183,42 +194,74 @@ class SQLiteMemoryStore:
         }
         return {"action": "confirm", "followup": followup}
 
+    @staticmethod
+    def _sim(qv, vec_json):
+        if not vec_json:
+            return 0.0
+        try:
+            return _cosine(qv, json.loads(vec_json))
+        except Exception:
+            return 0.0
+
     def recall_notes(self, question, user_id=None):
-        """Hybrid semantic + recency recall, scoped to this user (or guest
-        notes for user_id=None) -- a guest never sees a recognized user's
-        notes or vice versa."""
+        """Hybrid semantic + recency + reinforcement recall over this user's
+        facts AND their compaction/episode summaries, scoped to this user (or
+        guest notes for user_id=None) -- a guest never sees a recognized user's
+        notes or vice versa.
+
+        Summaries are included so compaction no longer drops older facts out of
+        recall: previously the summary that replaced them was never read back.
+        An item's score also leans slightly on how recently it was useful
+        (last_accessed_ts) and whether it was stated explicitly vs auto-captured.
+        """
+        question = question or ""
         conn = _connect()
-        rows = conn.execute(
-            "SELECT id, content, vec, created_ts FROM memory_items "
+        item_rows = conn.execute(
+            "SELECT id, content, vec, created_ts, last_accessed_ts, source FROM memory_items "
             "WHERE user_id IS ? AND superseded_by IS NULL AND type != 'reminder' "
             "ORDER BY created_ts DESC LIMIT ?",
-            (user_id, RECALL_CANDIDATES)).fetchall()
+            (user_id, config.RECALL_CANDIDATES)).fetchall()
+        summary_rows = conn.execute(
+            "SELECT id, summary_text AS content, vec, created_ts FROM memory_summaries "
+            "WHERE user_id IS ? ORDER BY created_ts DESC LIMIT ?",
+            (user_id, config.RECALL_SUMMARY_CANDIDATES)).fetchall()
         qv = embed(question)
-        scored = []
+        scored = []   # (score, is_item, row_id, content)
         if qv:
-            for row in rows:
-                if not row["vec"]:
+            for row in item_rows:
+                sim = self._sim(qv, row["vec"])
+                if sim <= 0.35:
                     continue
-                try:
-                    sim = _cosine(qv, json.loads(row["vec"]))
-                except Exception:
+                recency = _recency_weight(row["created_ts"])
+                access = _recency_weight(row["last_accessed_ts"]) if row["last_accessed_ts"] else 0.0
+                src_weight = 1.0 if (row["source"] or "explicit") == "explicit" else 0.6
+                score = 0.6 * sim + 0.22 * recency + 0.1 * access + 0.08 * src_weight
+                scored.append((score, True, row["id"], row["content"]))
+            for row in summary_rows:
+                sim = self._sim(qv, row["vec"])
+                if sim <= 0.30:   # summaries are broader, so a slightly looser gate
                     continue
-                if sim > 0.35:
-                    score = 0.7 * sim + 0.3 * _recency_weight(row["created_ts"])
-                    scored.append((score, row["id"], row["content"]))
+                score = 0.6 * sim + 0.4 * _recency_weight(row["created_ts"])
+                scored.append((score, False, row["id"], row["content"]))
         if scored:
-            scored.sort(reverse=True)
-            top = scored[:4]
-            conn.executemany("UPDATE memory_items SET last_accessed_ts = ? WHERE id = ?",
-                             [(time.time(), rid) for _s, rid, _c in top])
-            conn.commit()
+            scored.sort(key=lambda t: t[0], reverse=True)
+            top = scored[:config.RECALL_TOP]
+            item_ids = [rid for _s, is_item, rid, _c in top if is_item]
+            if item_ids:   # reinforce: reward facts that just proved useful
+                conn.executemany("UPDATE memory_items SET last_accessed_ts = ? WHERE id = ?",
+                                 [(time.time(), rid) for rid in item_ids])
+                conn.commit()
             conn.close()
-            return "\n".join(f"- {c}" for _s, _rid, c in top)
+            return "\n".join(f"- {c}" for _s, _i, _rid, c in top)
         conn.close()
-        # Lexical fallback when embeddings are unavailable.
+        # Lexical fallback when embeddings are unavailable -- include the latest
+        # summary so compacted history isn't invisible here either.
         words = [w for w in re.findall(r"[a-z]+", question.lower()) if len(w) > 3]
-        hits = [r["content"] for r in rows if any(w in r["content"].lower() for w in words)]
-        return "\n".join(f"- {h}" for h in hits[:4])
+        pool = [r["content"] for r in item_rows]
+        if summary_rows:
+            pool.append(summary_rows[0]["content"])
+        hits = [c for c in pool if any(w in c.lower() for w in words)] if words else []
+        return "\n".join(f"- {h}" for h in hits[:config.RECALL_TOP])
 
     def due_notes_for(self, user_id, date_str):
         """Notes this user asked to be followed up on for a given YYYY-MM-DD date."""
@@ -269,10 +312,29 @@ class SQLiteMemoryStore:
         conn.close()
         return n
 
-    def compact_user_memory(self, user_id, keep_recent=50):
+    def remember_episode(self, user_id, summary_text):
+        """Persist an end-of-conversation episode summary, embedded so it is
+        recalled later like a compaction summary ("what did we talk about
+        yesterday"). Skipped for guests (user_id=None)."""
+        if user_id is None or not summary_text:
+            return None
+        vec = embed(summary_text)
+        now = time.time()
+        conn = _connect()
+        cur = conn.execute(
+            "INSERT INTO memory_summaries (user_id, period_start, period_end, summary_text, created_ts, "
+            "vec, kind) VALUES (?, ?, ?, ?, ?, ?, 'episode')",
+            (user_id, now, now, summary_text, now, json.dumps(vec) if vec else ""))
+        conn.commit()
+        conn.close()
+        return cur.lastrowid
+
+    def compact_user_memory(self, user_id, keep_recent=None):
         """Summarize a user's oldest memory items into one memory_summaries
         row once they pass `keep_recent`, then mark the originals superseded
-        so recall stays fast and relevant as history grows."""
+        so recall stays fast and relevant as history grows. The summary is
+        embedded so it stays recallable -- the facts it absorbed are not lost."""
+        keep_recent = config.MEMORY_COMPACT_KEEP_RECENT if keep_recent is None else keep_recent
         conn = _connect()
         rows = conn.execute(
             "SELECT id, content, created_ts FROM memory_items WHERE user_id = ? "
@@ -285,11 +347,13 @@ class SQLiteMemoryStore:
         text = "\n".join(f"- {r['content']}" for r in to_compact)
         summary = chat("Summarize these personal notes into 2-3 short sentences capturing "
                        "lasting facts and preferences, dropping anything trivial or one-off.", text)
+        svec = embed(summary)
         conn = _connect()
         conn.execute(
-            "INSERT INTO memory_summaries (user_id, period_start, period_end, summary_text, created_ts) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (user_id, to_compact[0]["created_ts"], to_compact[-1]["created_ts"], summary, time.time()))
+            "INSERT INTO memory_summaries (user_id, period_start, period_end, summary_text, created_ts, "
+            "vec, kind) VALUES (?, ?, ?, ?, ?, ?, 'compaction')",
+            (user_id, to_compact[0]["created_ts"], to_compact[-1]["created_ts"], summary, time.time(),
+             json.dumps(svec) if svec else ""))
         summary_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         conn.executemany("UPDATE memory_items SET superseded_by = ? WHERE id = ?",
                          [(summary_id, r["id"]) for r in to_compact])
@@ -309,6 +373,7 @@ append_turn = store.append_turn
 recent_context = store.recent_context
 item_count = store.item_count
 compact_user_memory = store.compact_user_memory
+remember_episode = store.remember_episode
 find_same_attribute = store.find_same_attribute
 log_conflict = store.log_conflict
 conflict_history = store.conflict_history

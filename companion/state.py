@@ -53,6 +53,10 @@ conversation_active = False
 # A pending trivia question awaiting an answer on the next turn (see
 # intents/trivia_cmd.py), or None.
 pending_trivia = None
+# Set when a proactive opportunity nudge is delivered: {"user_id", "category",
+# "ts"}. The next user turn is attributed back to it (a clear "no" => dismissal)
+# so the engine can learn to stop pestering. Consumed/cleared after one turn.
+pending_opportunity_feedback = None
 
 # ---- microphone ownership ---------------------------------------------------
 # Only one process may hold the ALSA capture device at a time. The wake-word

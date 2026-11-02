@@ -1,5 +1,8 @@
 """CLI utility modes: doctor (dependency check), --text (typed Q&A, no mic),
-and selftest (offline assertions on routing/guardrails/math).
+selftest (offline assertions on routing/guardrails/math), eval-opportunities
+(proactive-engine precision), smoke-memory (drives a fake multi-turn
+conversation through the context-memory + feedback paths, no mic/speaker), and
+metrics (summarize real-use latency/wake/speaker-ID/mishear logs).
 """
 import os
 
@@ -201,16 +204,379 @@ def eval_opportunities():
     bootstrap()
     from .data.opportunity_eval import OPPORTUNITY_EVAL_SET
     from .llm.opportunity_planner import planner
-    correct = 0
+    correct = tp = fp = fn = 0
+    live_categories = set()
     for text, expected in OPPORTUNITY_EVAL_SET:
         decision = planner.detect(text, "")
         got = decision.has_opportunity and decision.confidence >= config.OPPORTUNITY_CONFIDENCE_THRESHOLD
         status = "PASS" if got == expected else "FAIL"
         correct += got == expected
+        tp += got and expected
+        fp += got and not expected
+        fn += (not got) and expected
+        if got and decision.category:
+            live_categories.add(decision.category)
         print(f"  {status}  expected={expected!s:<5} got={got!s:<5} "
              f"conf={decision.confidence:.2f} category={decision.category}  -- {text}")
     total = len(OPPORTUNITY_EVAL_SET)
-    print(f"\n{correct}/{total} correct")
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    print(f"\n{correct}/{total} correct   precision={precision:.2f} (fp={fp})   recall={recall:.2f} (fn={fn})")
+    print("Categories it fired on:", ", ".join(sorted(live_categories)) or "(none)")
+    print("To let a category actually SPEAK, add it to config.OPPORTUNITY_LIVE_CATEGORIES "
+          "once its precision looks acceptable (false positives are the thing to avoid -- "
+          "a wrong nudge is worse than a missed one).")
+
+
+_SMOKE_UID = -9100   # fake recognized user, kept well out of the real id space
+
+
+def _wipe_smoke_user(uid):
+    """Clean every table this smoke test writes, so a re-run starts fresh."""
+    import sqlite3
+    conn = sqlite3.connect(config.MEM_DB)
+    for tbl in ("memory_items", "short_term_context", "memory_summaries",
+                "opportunity_log", "opportunity_suppressions"):
+        try:
+            conn.execute(f"DELETE FROM {tbl} WHERE user_id = ?", (uid,))
+        except Exception:
+            pass
+    conn.commit()
+    conn.close()
+
+
+def smoke_memory():
+    """Drive a fake multi-turn conversation through the context-memory and
+    proactive-feedback paths with NO mic and NO speaker, so these features are
+    checkable on the device (or a dev box) without talking to it.
+
+    Offline-friendly: the embedding/LLM-dependent steps (session summary,
+    episode recall, compaction) are SKIPped when Ollama isn't reachable; the
+    rest run offline via the lexical-recall fallback and pure helpers.
+    """
+    bootstrap()
+    import time as _time
+    from .proactive import opportunity_repository as orepo
+    from .proactive import opportunity_worker
+    from .skills import utilities
+    try:
+        from .conversation import session   # heavier (audio/web); summary steps skip if it can't load
+    except Exception as exc:
+        session = None
+        print(f"(session module unavailable: {exc}; summary/episode steps will skip)")
+
+    uid = _SMOKE_UID
+    _wipe_smoke_user(uid)
+    online = embed("ping") is not None
+    print(f"Ollama reachable: {online}  (LLM/embedding steps are skipped if not)\n")
+
+    results = []
+
+    def check(name, ok):
+        results.append((name, bool(ok)))
+
+    def skip(name):
+        results.append((name + "  (SKIP: Ollama unreachable)", True))
+
+    turns = [
+        ("my name is Gourav and I live in Gurgaon", "Nice to meet you, Gourav."),
+        ("i work as a software engineer", "Good to know."),
+        ("my favourite colour is teal", "Teal is a nice colour."),
+        ("what's the weather like", "It's sunny and about 22 degrees."),
+        ("remind me to call the dentist", "Okay, I'll keep that in mind."),
+    ]
+
+    # 1) Turns land in the short-term context ring buffer (survives sleep/wake).
+    for q, a in turns:
+        memory_notes.append_turn(uid, "user", q)
+        memory_notes.append_turn(uid, "companion", a)
+    pairs = memory_notes.recent_context(uid, turns=3)
+    check("short-term context keeps the last three turns",
+          len(pairs) == 3 and set(pairs) == set(turns[-3:]))
+
+    # 2) Durable facts are stored and recalled (explicit store works offline).
+    memory_notes.remember_note("Gourav lives in Gurgaon", user_id=uid, attribute="home_city")
+    memory_notes.remember_note("Gourav's favourite colour is teal", user_id=uid,
+                               attribute="favorite_color")
+    check("recall surfaces an earlier fact", "Gurgaon" in memory_notes.recall_notes(
+        "where do I live", user_id=uid))
+
+    # 3) Canonical slot: a correction under an ALIAS supersedes instead of stacking.
+    slot = memory_notes._canonical_slot("city")   # -> "home_city"
+    check("slot alias 'city' canonicalizes to 'home_city'", slot == "home_city")
+    memory_notes.remember_note("Gourav lives in Pune", user_id=uid, attribute=slot)
+    current = memory_notes.find_same_attribute(uid, "home_city")
+    check("aliased correction supersedes the old value",
+          bool(current) and current["content"] == "Gourav lives in Pune")
+
+    # 4) Rolling session summary builds from the transcript (LLM).
+    if online and session:
+        summary = session._summarize_conversation(turns)
+        check("session summary is produced from the transcript", bool(summary))
+    else:
+        skip("session summary is produced from the transcript")
+
+    # 5) Episode summary persists and is recallable in a later 'session' (A1/A7).
+    if online:
+        episode = (session._summarize_conversation(turns) if session else "") \
+            or "We talked about Gourav's details."
+        memory_notes.remember_episode(uid, episode)
+        later = memory_notes.recall_notes("what did we talk about earlier", user_id=uid)
+        check("an episode summary is recalled in a later session", bool(later))
+    else:
+        skip("an episode summary is recalled in a later session")
+
+    # 6) Compaction keeps older facts recallable instead of forgetting them (A1).
+    if online:
+        for i in range(6):
+            memory_notes.remember_note(f"Gourav trivia fact number {i}", user_id=uid)
+        compacted = memory_notes.compact_user_memory(uid, keep_recent=3)
+        surfaced = memory_notes.recall_notes("Gourav trivia facts", user_id=uid)
+        check("compaction leaves a recallable summary behind", compacted and bool(surfaced))
+    else:
+        skip("compaction leaves a recallable summary behind")
+
+    # 7) Proactive feedback: repeated dismissals auto-suppress a category (B2, offline).
+    cat = "smoke_category"
+    for _ in range(config.OPPORTUNITY_DISMISS_SUPPRESS_THRESHOLD):
+        state.pending_opportunity_feedback = {"user_id": uid, "category": cat, "ts": _time.time()}
+        opportunity_worker.record_feedback(uid, "no, not now")
+    check("repeated 'no' to a nudge auto-suppresses the category",
+          orepo.is_suppressed(uid, cat))
+
+    # 8) Delivery ordering: priority first, expired dropped (B5, offline, no audio).
+    ordered = [it["text"] for it in utilities.plan_reminders([
+        {"text": "low", "priority": 9, "expires_ts": None},
+        {"text": "high", "priority": 1, "expires_ts": None},
+        {"text": "stale", "priority": 1, "expires_ts": _time.time() - 1},
+    ])]
+    check("reminders ordered by priority with expired dropped", ordered == ["high", "low"])
+
+    # 9) Metrics logging writes and reads back (uses a throwaway file, not the real log).
+    import json as _json
+    from . import metrics as _metrics
+    saved_log, tmp = config.METRICS_LOG, os.path.join(config.WORK, "metrics_smoke.jsonl")
+    try:
+        config.METRICS_LOG = tmp
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        _metrics.log_turn(kind="llm", heard="probe", answer="ok", first_word_ms=123)
+        rows = list(open(tmp, encoding="utf-8")) if os.path.exists(tmp) else []
+        check("metrics logging writes and reads back a turn",
+              bool(rows) and _json.loads(rows[-1]).get("first_word_ms") == 123)
+    finally:
+        config.METRICS_LOG = saved_log
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+    _wipe_smoke_user(uid)
+    state.pending_opportunity_feedback = None
+
+    passed = sum(ok for _n, ok in results)
+    for name, ok in results:
+        print(f"  {'PASS' if ok else 'FAIL'}  {name}")
+    print(f"\n{passed}/{len(results)} checks passed")
+    return 0 if passed == len(results) else 1
+
+
+def _pct(values, p):
+    """Nearest-rank percentile of a list (pure Python, no numpy)."""
+    if not values:
+        return None
+    s = sorted(values)
+    k = max(0, min(len(s) - 1, int(round((p / 100.0) * (len(s) - 1)))))
+    return s[k]
+
+
+def _load_metrics(days=None):
+    import json
+    import time
+    events = []
+    for path in (config.METRICS_LOG + ".1", config.METRICS_LOG):   # oldest generation first
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            events.append(json.loads(line))
+                        except Exception:
+                            pass
+        except OSError:
+            continue
+    if days:
+        cutoff = time.time() - days * 86400
+        events = [e for e in events if e.get("ts", 0) >= cutoff]
+    return events
+
+
+def _export_turns(turns, path):
+    import csv
+    import time
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["when", "user", "kind", "first_word_ms", "heard", "answer", "correct(1/0)"])
+        for e in turns:
+            w.writerow([time.strftime("%Y-%m-%d %H:%M", time.localtime(e.get("ts", 0))),
+                        e.get("user", ""), e.get("kind", ""), e.get("first_word_ms", ""),
+                        e.get("heard", ""), e.get("answer", ""), ""])
+    print(f"wrote {len(turns)} turns to {path}")
+    print("Fill the last column (1 = right, 0 = wrong) on a sample to get real transcription/intent accuracy.")
+    return 0
+
+
+def _print_metrics_summary(events, label):
+    """Print the latency / wake / speaker-ID / mishear summary for a set of
+    events. Shared by real and demo (synthetic) data."""
+    from collections import defaultdict
+    turns = [e for e in events if e.get("event") == "turn"]
+    discarded = [e for e in turns if e.get("kind") == "discarded"]
+    answered = [e for e in turns if e.get("kind") != "discarded"]
+    wakes = [e for e in events if e.get("event") == "wake"]
+    sessions = [e for e in events if e.get("event") == "session"]
+    ids = [e for e in events if e.get("event") == "identify"]
+
+    print(label + "\n")
+
+    # 1) Latency -- the headline numbers.
+    latency = [e for e in answered if e.get("kind") in ("llm", "live", "text")
+               and e.get("first_word_ms") is not None]
+    fw = [e["first_word_ms"] for e in latency]
+    asr = [e["asr_ms"] for e in latency if e.get("asr_ms")]
+    print(f"LATENCY  (answered Q&A turns: {len(latency)})")
+    if fw:
+        print(f"  time-to-first-word ms:  p50={_pct(fw, 50)}  p95={_pct(fw, 95)}  max={max(fw)}")
+    if asr:
+        print(f"  transcription ms:       p50={_pct(asr, 50)}  p95={_pct(asr, 95)}  max={max(asr)}")
+    for k in ("llm", "live", "text"):
+        kk = [e["first_word_ms"] for e in latency if e.get("kind") == k]
+        if kk:
+            print(f"    {k:<5} first-word p50={_pct(kk, 50)} ms  (n={len(kk)})")
+
+    # 2) Wake / false-wake.
+    detected = [w for w in wakes if w.get("detected")]
+    heard_only = [w for w in wakes if not w.get("detected")]
+    empty_sessions = [s for s in sessions if s.get("answered", 0) == 0]
+    print("\nWAKE")
+    print(f"  wake detections: {len(detected)}   non-wake sounds transcribed while idle: {len(heard_only)}")
+    if sessions:
+        rate = 100 * len(empty_sessions) // max(1, len(sessions))
+        print(f"  sessions: {len(sessions)}   woke but produced no real turn: "
+              f"{len(empty_sessions)} ({rate}%  <- false-wake proxy)")
+
+    # 3) Speaker ID -- the trust root under all personalization.
+    print("\nSPEAKER ID")
+    if ids:
+        thr = config.SPEAKER_MATCH_THRESHOLD
+        by_user = defaultdict(list)
+        for e in ids:
+            by_user[e.get("user", "?")].append(e.get("score", 0.0))
+        for user, scores in sorted(by_user.items()):
+            below = sum(1 for s in scores if s < thr)
+            print(f"  {user:<16} n={len(scores):<4} score p50={_pct(scores, 50):.3f} "
+                  f"min={min(scores):.3f} max={max(scores):.3f}  below-threshold={below}")
+        borderline = sum(1 for e in ids if abs(e.get("score", 0.0) - thr) <= 0.05)
+        print(f"  threshold={thr}   borderline matches (within 0.05 of it): {borderline}")
+    else:
+        print("  (no identify events yet)")
+
+    # 4) Mishear proxies.
+    n = max(1, len(answered))
+    def share(xs):
+        return f"{100 * len(xs) // n}%"
+    print("\nMISHEAR PROXIES")
+    print(f"  answered turns: {len(answered)}   discarded as noise: {len(discarded)}")
+    print(f"  needed a confirmation (low confidence): {share([e for e in answered if e.get('low_conf')])}")
+    print(f"  needed a continuation prompt:           {share([e for e in answered if e.get('continuation')])}")
+    print(f"  interrupted mid-answer (barge-in):      {share([e for e in answered if e.get('barge_in')])}")
+
+
+def _read_jsonl(path):
+    import json
+    events = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        events.append(json.loads(line))
+                    except Exception:
+                        pass
+    except OSError:
+        pass
+    return events
+
+
+def _metrics_demo(args):
+    """Preview the summary against synthetic data written to a SEPARATE file,
+    so there's something to look at before a week of real use exists -- and the
+    real log is never touched. `demo clear` removes the dummy data."""
+    from . import metrics
+    path = metrics.demo_path()
+    if args and args[0] == "clear":
+        try:
+            os.remove(path)
+            print(f"removed dummy data: {path}")
+        except OSError:
+            print("no dummy data to remove.")
+        return 0
+    days = int(args[0]) if (args and args[0].isdigit()) else 7
+    path, count = metrics.generate_demo(days=days)
+    print(f"Wrote {count} synthetic events (~{days} days) to a SEPARATE file: {path}")
+    print("This is DUMMY data -- your real metrics log is untouched.\n")
+    _print_metrics_summary(_read_jsonl(path), f"DEMO (synthetic) -- {path}")
+    print("\nRemove the dummy data when you're done:")
+    print("  python3 talk.py metrics demo clear")
+    return 0
+
+
+def metrics_cli(args=None):
+    """Summarize real-use metrics from config.METRICS_LOG.
+
+    Usage:
+      talk.py metrics [DAYS]           summary (optionally only the last DAYS days)
+      talk.py metrics export <file>    dump answered turns to CSV for hand-scoring
+      talk.py metrics clear            delete the metrics log
+      talk.py metrics demo [DAYS]      preview with synthetic data (separate file)
+      talk.py metrics demo clear       remove that synthetic data
+    """
+    args = list(args or [])
+
+    if args and args[0] == "demo":
+        return _metrics_demo(args[1:])
+
+    if args and args[0] == "clear":
+        for path in (config.METRICS_LOG, config.METRICS_LOG + ".1"):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        print("metrics cleared")
+        return 0
+
+    export_path = args[1] if (len(args) >= 2 and args[0] == "export") else None
+    days = int(args[0]) if (args and args[0].isdigit()) else None
+
+    events = _load_metrics(days)
+    if not events:
+        print(f"No metrics yet at {config.METRICS_LOG}.")
+        print("Use the device normally for a while (ask it things), then re-run this.")
+        print("No real data yet? Preview the summary with synthetic data:")
+        print("  python3 talk.py metrics demo")
+        return 0
+
+    if export_path:
+        answered = [e for e in events if e.get("event") == "turn" and e.get("kind") != "discarded"]
+        return _export_turns(answered, export_path)
+
+    label = f"metrics from {config.METRICS_LOG}" + (f"  (last {days} days)" if days else "")
+    _print_metrics_summary(events, label)
+    print("\nFor real transcription/intent accuracy, hand-score a sample:")
+    print("  python3 talk.py metrics export turns.csv")
+    return 0
 
 
 def list_users_cli():

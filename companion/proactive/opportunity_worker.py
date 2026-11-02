@@ -7,6 +7,7 @@ growing without bound.
 """
 import queue
 import threading
+import time
 
 from .. import config, state
 from . import opportunity_repository as repo
@@ -25,31 +26,54 @@ def enqueue(user_id, question, answer):
         pass   # best-effort: drop rather than block the conversation or pile up
 
 
-def _deliver(text):
+def is_shadow(category):
+    """Whether this category is still shadow-only. A category speaks once it is
+    explicitly graduated (listed in OPPORTUNITY_LIVE_CATEGORIES), or when global
+    shadow mode is turned off entirely. Everything else keeps logging silently
+    so you can review its real precision first."""
+    if category and category in config.OPPORTUNITY_LIVE_CATEGORIES:
+        return False
+    return config.OPPORTUNITY_SHADOW_MODE
+
+
+def _deliver_nudge(text, user_id, category):
+    """Deliver a proactive nudge (priority-ranked, decays if undelivered) and
+    arm feedback attribution so the next user turn can teach the engine whether
+    this category is welcome."""
     if not text:
         return
-    state.reminder_queue.put(text)   # spoken at the next safe gap, same as timers/proactive nudges
+    state.pending_opportunity_feedback = {"user_id": user_id, "category": category, "ts": time.time()}
+    from ..skills.utilities import queue_reminder
+    queue_reminder(text, priority=5, ttl=config.OPPORTUNITY_NUDGE_TTL_SECONDS, category=category)
 
 
 def _advance_open_thread(thread, user_id, question):
     from ..llm.opportunity_planner import planner
+    category = thread["category"]
     decision = planner.advance(thread, question)
+    shadow = is_shadow(category)
     if decision.action == "continue":
         repo.update_thread(thread["id"], "awaiting_info",
                           collected_info=decision.collected_info, next_question=decision.next_question)
-        _deliver(decision.next_question)
-        repo.log_decision(user_id, thread["category"], "continued")
+        if shadow:
+            repo.log_decision(user_id, category, "skipped_shadow", decision.next_question or "")
+        else:
+            _deliver_nudge(decision.next_question, user_id, category)
+            repo.log_decision(user_id, category, "continued")
     elif decision.action == "ready":
         repo.update_thread(thread["id"], "ready_to_act", final_message=decision.final_message)
-        _deliver(decision.final_message)
-        repo.log_decision(user_id, thread["category"], "ready")
+        if shadow:
+            repo.log_decision(user_id, category, "skipped_shadow", decision.final_message or "")
+        else:
+            _deliver_nudge(decision.final_message, user_id, category)
+            repo.log_decision(user_id, category, "ready")
     elif decision.action == "suppress":
         repo.update_thread(thread["id"], "suppressed")
-        repo.suppress(user_id, thread["category"])
-        repo.log_decision(user_id, thread["category"], "suppressed")
+        repo.suppress(user_id, category)
+        repo.log_decision(user_id, category, "suppressed")
     else:
         repo.update_thread(thread["id"], "done")
-        repo.log_decision(user_id, thread["category"], "closed")
+        repo.log_decision(user_id, category, "closed")
 
 
 def _detect_new_opportunity(user_id, question, answer):
@@ -65,13 +89,40 @@ def _detect_new_opportunity(user_id, question, answer):
         repo.log_decision(user_id, decision.category, "skipped_suppressed")
         return
     repo.open_thread(user_id, decision.category, decision.topic_summary, {}, decision.next_question)
-    if config.OPPORTUNITY_SHADOW_MODE:
-        # Shadow mode: judge and log, but don't actually speak anything yet --
-        # lets you review real precision before trusting it live.
+    if is_shadow(decision.category):
+        # Shadow: judge and log, but don't actually speak this category yet --
+        # lets you review real precision before graduating it.
         repo.log_decision(user_id, decision.category, "skipped_shadow", decision.next_question or "")
         return
-    _deliver(decision.next_question)
+    _deliver_nudge(decision.next_question, user_id, decision.category)
     repo.log_decision(user_id, decision.category, "opened")
+
+
+def record_feedback(user_id, text):
+    """Attribute the user's reply to the last spoken nudge: a clear negative is
+    a dismissal, and enough dismissals for a category auto-suppress it for this
+    user. This only ever *reduces* proactivity, so a misattribution is harmless.
+    Consumes the pending marker after one turn regardless."""
+    fb = state.pending_opportunity_feedback
+    if not fb:
+        return
+    state.pending_opportunity_feedback = None
+    if time.time() - fb["ts"] > config.OPPORTUNITY_FEEDBACK_WINDOW_SECONDS:
+        return
+    if fb.get("user_id") != user_id:
+        return
+    category = fb.get("category")
+    from ..conversation import router   # lazy: avoid an import cycle at module load
+    if router.is_negative(text):
+        repo.log_decision(user_id, category, "dismissed")
+        since = time.time() - config.OPPORTUNITY_DISMISS_LOOKBACK_SECONDS
+        if repo.dismissal_count(user_id, category, since) >= config.OPPORTUNITY_DISMISS_SUPPRESS_THRESHOLD:
+            repo.suppress(user_id, category)
+            repo.log_decision(user_id, category, "auto_suppressed")
+    elif router.is_affirmative(text):
+        repo.log_decision(user_id, category, "engaged")
+    else:
+        repo.log_decision(user_id, category, "ignored")
 
 
 def _run_job(user_id, question, answer):

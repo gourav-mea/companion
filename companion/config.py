@@ -108,6 +108,59 @@ GOODBYE_WORDS = ["goodbye", "good bye", "bye bye", "go to sleep", "sleep now",
 CONVO_IDLE_ROUNDS = 6
 CONTEXT_TURNS = 3
 
+# ---- thinking cue (fill the wait before an answer starts) ----------------------
+# While a slow answer is still being produced -- an LLM reasoning or a live-data
+# fetch -- play a short "I'm working on it" cue so the device doesn't sit in dead
+# silence. Latency-adaptive: NOTHING plays if the answer starts quickly, and the
+# cue is only ever created for the slow route kinds (llm/live), never before an
+# instant built-in answer (time, math, a joke...). Two tiers: a soft earcon
+# first, then -- only if it's STILL going -- a short spoken phrase.
+THINKING_CUE_ENABLED = True
+THINKING_CUE_DELAY = 0.9        # seconds of silence before the earcon plays
+THINKING_CUE_ESCALATE = 3.0     # seconds before upgrading to a spoken phrase
+THINKING_CUE_EARCON = True      # soft tone first (set False for phrase-only)
+# Phrase pool per route kind -- picked at random so it doesn't wear out. `live`
+# phrases say what's happening ("look that up"); `llm` ones are generic thought.
+THINKING_CUE_PHRASES = {
+    "llm": ["Let me think about that.", "Give me a moment.", "Let me think."],
+    "live": ["Let me look that up.", "Let me check that for you.", "One moment."],
+}
+THINKING_CUE_FILE = os.path.join(WORK, "thinking_earcon.wav")
+
+# ---- context memory (recall tuning & session summary) --------------------------
+RECALL_CANDIDATES = 150           # memory_items pulled from SQL before the in-Python rerank
+RECALL_SUMMARY_CANDIDATES = 20    # memory_summaries (compaction + episode) pulled for the rerank
+RECALL_TOP = 4                    # how many recalled lines to put in the prompt
+MEMORY_COMPACT_KEEP_RECENT = 50   # items kept verbatim before older ones compact into a summary
+# Rolling in-conversation summary so context survives beyond the last few verbatim
+# turns without blowing the small LLM context window.
+SESSION_VERBATIM_TURNS = 2        # most-recent turns kept word-for-word in the prompt
+SESSION_SUMMARY_EVERY = 3         # re-summarize the older turns every N answered turns
+SESSION_EPISODE_ENABLED = True    # persist an episode summary at end of a conversation (recognized users)
+# Free-form slot names from the fact extractor fragment ("city" vs "home_city")
+# and defeat the exact-slot supersede, so a correction stacks instead of
+# replacing. Map known variants onto one canonical name before storing.
+MEMORY_SLOT_ALIASES = {
+    "city": "home_city", "hometown": "home_city", "location": "home_city",
+    "lives_in": "home_city", "home": "home_city",
+    "job": "job_title", "occupation": "job_title", "work": "job_title", "profession": "job_title",
+    "fullname": "name", "full_name": "name", "username": "name",
+    "bday": "birthday", "date_of_birth": "birthday", "dob": "birthday",
+    "favourite_colour": "favorite_color", "favorite_colour": "favorite_color",
+    "fav_color": "favorite_color",
+}
+
+# ---- real-use metrics (dogfooding instrumentation; read with `talk.py metrics`) --
+# Passively logs one JSON line per wake/turn/identify/session event so the core
+# interaction loop can be measured from real use -- time-to-first-word, wake
+# false-positive rate, speaker-ID score distribution, and mishear proxies --
+# instead of being tuned by feel. Cheap and failure-isolated: never slows or
+# breaks the conversation.
+METRICS_ENABLED = True
+METRICS_LOG = os.path.join(WORK, "metrics.jsonl")
+METRICS_LOG_TEXT = True   # include transcripts/answers; set False to keep only timings/scores (privacy)
+METRICS_MAX_BYTES = 5 * 1024 * 1024   # rotate the log once it passes this size
+
 # ---- guardrails ---------------------------------------------------------------
 GUARDRAILS_ENABLED = True
 GUARD_USE_LLM_JUDGE = False
@@ -210,6 +263,8 @@ SPEAKER_MATCH_THRESHOLD = 0.65   # cosine similarity needed to accept a voice ma
                                  # Measured 0.77 via `talk.py test-voice` -- 0.75 left only
                                  # 0.02 of headroom, so normal turn-to-turn variation dropped
                                  # live clips below it. Lower = more false matches between people.
+REIDENTIFY_AFTER_SECONDS = 30    # within a conversation the speaker rarely changes, so reuse
+                                 # the match; a long gap is when someone else plausibly took over.
 ENROLL_SAMPLES = 5               # voice clips recorded per enrollment
 ENROLL_SAMPLE_SECONDS = 4
 IDENTITY_DB = os.path.join(WORK, "identity.db")
@@ -268,4 +323,23 @@ OPPORTUNITY_CONFIDENCE_THRESHOLD = 0.7
 OPPORTUNITY_CALL_TIMEOUT_SECONDS = 60   # generous -- first vote may need a cold load on Pi CPU
 OPPORTUNITY_QUEUE_MAXSIZE = 3             # bounded background queue; full => drop, never block/pile up
 OPPORTUNITY_THREAD_TTL_SECONDS = 3600       # abandon an open thread if it goes stale this long
+
+# ---- proactive opportunity: graduation, feedback & cost -------------------------
+# Per-category opt-in to actually SPEAK. A category here goes live even while
+# OPPORTUNITY_SHADOW_MODE stays True (everything else keeps shadow-logging). Add
+# one only after `talk.py eval-opportunities` shows acceptable precision for it.
+OPPORTUNITY_LIVE_CATEGORIES = []     # e.g. ["date_reminder"]
+# Learn from how the user reacts to a spoken nudge: a clear "no/stop/not now"
+# within this window counts as a dismissal; after enough dismissals for a
+# category (within the lookback) auto-suppress it for that user.
+OPPORTUNITY_FEEDBACK_WINDOW_SECONDS = 150
+OPPORTUNITY_DISMISS_SUPPRESS_THRESHOLD = 2
+OPPORTUNITY_DISMISS_LOOKBACK_SECONDS = 30 * 24 * 3600
+# Adaptive self-consistency: take one detection sample first; only spend the
+# full OPPORTUNITY_VOTES when that first sample lands near the decision boundary.
+OPPORTUNITY_ADAPTIVE_VOTING = True
+OPPORTUNITY_VOTE_MARGIN = 0.15
+# Proactive nudges decay: if not delivered within this long (device busy/asleep),
+# drop them rather than speak a stale suggestion.
+OPPORTUNITY_NUDGE_TTL_SECONDS = 900
 

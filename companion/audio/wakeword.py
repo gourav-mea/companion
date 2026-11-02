@@ -8,7 +8,7 @@ dependency on the conversation layer (dependency inversion).
 import subprocess
 import time
 
-from .. import config, state
+from .. import config, metrics, state
 from ..speech.transcriber import transcribe, wake_model
 from . import capture
 
@@ -140,6 +140,7 @@ def openwakeword_loop(switch_enabled, drain_reminders, on_wake):
                 pass
         if detected:
             print(f"wake detected (score {best_seen:.2f})")
+            metrics.log_wake(True, source="oww")
             try:
                 model.reset()   # clear the detector's rolling buffer
             except Exception:

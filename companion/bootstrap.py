@@ -173,4 +173,19 @@ def _migrate_memory_schema(conn):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_opportunity_log_user "
                     "ON opportunity_log(user_id, created_ts DESC)")
         conn.execute("INSERT OR REPLACE INTO schema_meta (id, version) VALUES (1, 5)")
+
+    if version < 6:
+        # Make summaries recallable: embed them like memory_items, and tag their
+        # kind so compaction summaries and end-of-conversation episodes share one
+        # table but can be told apart. Before this, compaction effectively
+        # deleted older facts from recall -- the summary that replaced them was
+        # never read back.
+        for col, decl in (("vec", "vec TEXT"), ("kind", "kind TEXT NOT NULL DEFAULT 'compaction'")):
+            try:
+                conn.execute(f"ALTER TABLE memory_summaries ADD COLUMN {decl}")
+            except Exception:
+                pass
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_summaries_user "
+                    "ON memory_summaries(user_id, created_ts DESC)")
+        conn.execute("INSERT OR REPLACE INTO schema_meta (id, version) VALUES (1, 6)")
     conn.commit()

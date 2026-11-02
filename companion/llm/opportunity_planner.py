@@ -70,13 +70,34 @@ def _call_json(system, user, model, keep_alive, num_ctx, temperature):
 
 class LLMOpportunityPlanner:
     def detect(self, question, answer):
-        samples = []
-        for _ in range(config.OPPORTUNITY_VOTES):
-            data = _call_json(_DETECT_SYSTEM, question, config.OPPORTUNITY_MODEL,
+        def sample():
+            return _call_json(_DETECT_SYSTEM, question, config.OPPORTUNITY_MODEL,
                               config.OPPORTUNITY_MODEL_KEEP_ALIVE, config.OPPORTUNITY_NUM_CTX,
                               temperature=0.4)
-            if data is not None:
-                samples.append(data)
+
+        samples = []
+        # Adaptive voting: take one sample first and only pay for the full
+        # self-consistency vote when it lands near the decision boundary. A
+        # clear yes/no on the first sample (the common case) costs one heavy
+        # model call instead of OPPORTUNITY_VOTES of them.
+        if config.OPPORTUNITY_ADAPTIVE_VOTING:
+            first = sample()
+            if first is not None:
+                samples.append(first)
+                conf = float(first.get("confidence", 0) or 0)
+                clear_no = not first.get("has_opportunity")
+                clear_yes = (first.get("has_opportunity")
+                             and conf >= config.OPPORTUNITY_CONFIDENCE_THRESHOLD + config.OPPORTUNITY_VOTE_MARGIN)
+                if not (clear_no or clear_yes):
+                    for _ in range(config.OPPORTUNITY_VOTES - 1):
+                        data = sample()
+                        if data is not None:
+                            samples.append(data)
+        else:
+            for _ in range(config.OPPORTUNITY_VOTES):
+                data = sample()
+                if data is not None:
+                    samples.append(data)
         if not samples:
             return OpportunityDecision(has_opportunity=False)
 

@@ -51,11 +51,20 @@ def is_noise(text):
     return False
 
 
-def with_context(system, history):
-    if not history:
+def with_context(system, history, summary=None):
+    """Fold conversational context into the system prompt: a rolling summary of
+    the older turns (so context survives beyond the last few turns without
+    overflowing the small context window), plus the most-recent turns verbatim
+    for immediate reference ("set a reminder for that")."""
+    parts = []
+    if summary:
+        parts.append("Summary of the conversation so far:\n" + summary)
+    if history:
+        parts.append("Most recent exchanges:\n"
+                     + "\n".join(f"User: {q}\nYou: {a}" for q, a in history))
+    if not parts:
         return system
-    ctx = "\n".join(f"User: {q}\nYou: {a}" for q, a in history)
-    return system + "\n\nRecent conversation so far:\n" + ctx
+    return system + "\n\n" + "\n\n".join(parts)
 
 
 def repeat_last():
@@ -120,19 +129,46 @@ def _timer_fire(label):
     if state.led:
         for _ in range(6):
             state.led.on(); time.sleep(0.2); state.led.off(); time.sleep(0.2)
-    state.reminder_queue.put(f"Your {label} is done.")
+    queue_reminder(f"Your {label} is done.", priority=1)   # an explicit timer outranks speculative nudges
+
+
+def queue_reminder(text, priority=5, ttl=None, category=None):
+    """Enqueue a spoken reminder/nudge with a priority (lower = sooner) and an
+    optional time-to-live after which it is dropped undelivered rather than
+    spoken stale. Plain strings put on the queue elsewhere still work (they get
+    the default priority and no expiry)."""
+    if not text:
+        return
+    state.reminder_queue.put({"text": text, "priority": priority, "category": category,
+                              "expires_ts": (time.time() + ttl) if ttl else None})
+
+
+def plan_reminders(items):
+    """Pure ordering/decay step shared by drain_reminders and the memory smoke
+    test: drop any that have expired, then order by priority (lower = sooner).
+    Kept separate so delivery order is testable without actually speaking."""
+    now = time.time()
+    live = [it for it in items if not (it.get("expires_ts") and it["expires_ts"] < now)]
+    live.sort(key=lambda it: it.get("priority", 5))
+    return live
 
 
 def drain_reminders():
-    """Speak any reminders that have come due. Called from the loops' gaps."""
+    """Speak any reminders that have come due -- highest priority first, dropping
+    any that expired while the device was busy or asleep. Called from the loops'
+    gaps."""
     import queue
     from ..audio.playback import speak
+    items = []
     while True:
         try:
-            msg = state.reminder_queue.get_nowait()
+            raw = state.reminder_queue.get_nowait()
         except queue.Empty:
-            return
-        speak(msg)
+            break
+        items.append(raw if isinstance(raw, dict)
+                     else {"text": raw, "priority": 5, "expires_ts": None})
+    for it in plan_reminders(items):
+        speak(it["text"])
 
 
 def set_timer_cmd(question):

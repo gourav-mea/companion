@@ -6,6 +6,7 @@ import time
 
 from .. import config, state
 from ..skills import watches
+from ..skills.utilities import queue_reminder
 from . import triggers
 
 
@@ -40,5 +41,5 @@ def proactive_loop():
         for msg in messages:
             if len(fired_this_hour) >= config.PROACTIVE_MAX_PER_HOUR:
                 break
-            state.reminder_queue.put(msg)
+            queue_reminder(msg, priority=3)   # scheduled briefings: below alarms/timers, above nudges
             fired_this_hour.append(msg)

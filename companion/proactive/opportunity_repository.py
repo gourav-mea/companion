@@ -100,6 +100,29 @@ def log_decision(user_id, category, decision, detail=""):
     conn.close()
 
 
+def dismissal_count(user_id, category, since_ts):
+    """How many times this user has dismissed nudges of this category since
+    `since_ts` -- used to auto-suppress a category the user keeps rejecting."""
+    conn = _connect()
+    n = conn.execute(
+        "SELECT COUNT(*) FROM opportunity_log WHERE user_id IS ? AND category = ? "
+        "AND decision = 'dismissed' AND created_ts >= ?",
+        (user_id, category, since_ts)).fetchone()[0]
+    conn.close()
+    return n
+
+
+def get_ready_thread(user_id):
+    """The most recent thread that reached 'ready_to_act' (its help is prepared
+    but wasn't delivered yet) -- surfaced when the user next returns."""
+    conn = _connect()
+    row = conn.execute(
+        "SELECT * FROM opportunity_threads WHERE user_id IS ? AND state = 'ready_to_act' "
+        "ORDER BY updated_ts DESC LIMIT 1", (user_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
 def recent_log(user_id, limit=10):
     conn = _connect()
     rows = conn.execute(

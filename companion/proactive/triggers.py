@@ -109,12 +109,12 @@ def check_recurring_alarms():
     request, not a speculative nudge, so it isn't gated behind
     PROACTIVE_ENABLED/quiet hours."""
     from ..skills import alarms
+    from ..skills.utilities import queue_reminder
     now = time.localtime()
     today_str = time.strftime("%Y-%m-%d", now)
     for alarm_id, _user_id, label in alarms.due_alarms(now.tm_hour, now.tm_min, today_str):
         alarms.mark_fired(alarm_id, today_str)
-        from .. import state
-        state.reminder_queue.put(f"Alarm: {label}" if label else "Alarm!")
+        queue_reminder(f"Alarm: {label}" if label else "Alarm!", priority=1)   # explicit alarm: highest
 
 
 # New scheduled/event-based nudges register here -- the scheduler never

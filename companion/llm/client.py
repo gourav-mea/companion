@@ -68,15 +68,34 @@ def warm_model():
         pass
 
 
+_embed_cache = {}
+_EMBED_CACHE_MAX = 256
+
+
 def embed(text):
-    """Local embedding vector from Ollama (loopback), or None if unavailable."""
+    """Local embedding vector from Ollama (loopback), or None if unavailable.
+
+    A small in-process cache avoids re-embedding the same string within a turn:
+    one question is embedded by memory recall, fact capture and opportunity
+    detection, and recall re-embeds the same query every turn -- each embed is a
+    network round-trip on the reply's critical path."""
+    if not text:
+        return None
+    cached = _embed_cache.get(text)
+    if cached is not None:
+        return cached
     try:
         r = requests.post(config.EMBED_URL, json={"model": config.EMBED_MODEL, "prompt": text},
                           timeout=config.LIVE_TIMEOUT)
         vec = r.json().get("embedding")
-        return vec if isinstance(vec, list) and vec else None
+        vec = vec if isinstance(vec, list) and vec else None
     except Exception:
         return None
+    if vec is not None:
+        if len(_embed_cache) >= _EMBED_CACHE_MAX:
+            _embed_cache.clear()   # crude but bounded; embeddings are deterministic so staleness is a non-issue
+        _embed_cache[text] = vec
+    return vec
 
 
 def current_model():
