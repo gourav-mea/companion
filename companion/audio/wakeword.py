@@ -61,7 +61,8 @@ def get_oww():
                 last_exc = exc
         if _oww_model is None and last_exc is not None:
             raise last_exc
-        print(f"wake: openWakeWord ({', '.join(config.OWW_WAKE)})")
+        loaded = list(getattr(_oww_model, "models", {}) or config.OWW_WAKE)
+        print(f"wake: openWakeWord ({', '.join(str(m) for m in loaded)})")
     except Exception as exc:
         print(f"openWakeWord unavailable ({exc}); using the Whisper wake word")
         _oww_model = None
@@ -93,6 +94,8 @@ def openwakeword_loop(switch_enabled, drain_reminders, on_wake):
              "-c", "1", "-t", "raw"],
             stdout=subprocess.PIPE)
         detected = False
+        best_seen = 0.0
+        last_report = time.time()
         try:
             while switch_enabled():
                 if capture.mic_requested():
@@ -107,7 +110,14 @@ def openwakeword_loop(switch_enabled, drain_reminders, on_wake):
                     break
                 frame = np.frombuffer(data, dtype=np.int16)
                 scores = model.predict(frame)
-                if scores and max(scores.values()) >= config.OWW_THRESHOLD:
+                top = max(scores.values()) if scores else 0.0
+                best_seen = max(best_seen, top)
+                if config.WAKE_DEBUG and time.time() - last_report >= 3:
+                    print(f"  [wake] best score in last 3s: {best_seen:.3f} "
+                          f"(needs >= {config.OWW_THRESHOLD})")
+                    best_seen = 0.0
+                    last_report = time.time()
+                if top >= config.OWW_THRESHOLD:
                     detected = True
                     break
         finally:

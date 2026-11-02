@@ -142,7 +142,7 @@ def doctor():
         if not exec_path or not os.path.exists(exec_path):
             raise RuntimeError(f"service ExecStart interpreter missing: {exec_path!r}")
         probe = ("import importlib;"
-                 "print(','.join(m for m in ('resemblyzer','webrtcvad','openwakeword','numpy')"
+                 "print(','.join(m for m in ('resemblyzer','webrtcvad','openwakeword','numpy','gpiozero')"
                  " if importlib.util.find_spec(m) is None))")
         res = subprocess.run([exec_path, "-c", probe], capture_output=True, text=True, check=False)
         absent = (res.stdout or "").strip()
@@ -278,6 +278,56 @@ def test_voice_cli():
               f"(no memory/personalization).\nEither re-enroll, or lower SPEAKER_MATCH_THRESHOLD "
               f"toward {max(0.5, best - 0.05):.2f} -- but the lower it goes, the more likely "
               f"someone else gets mistaken for you.")
+
+
+def test_mic_cli():
+    """Record you SPEAKING and report every gate the audio must pass.
+
+    calibrate-noise measures silence; this measures speech. If a gate tuned
+    against ambient noise is also rejecting your voice, this shows exactly
+    which one.
+    """
+    bootstrap()
+    from .audio.capture import mic_session, record, wav_rms
+    from .audio import vad
+    from .speech.transcriber import transcribe
+    from .skills.utilities import is_noise
+
+    print("Say a full sentence now, in your normal voice...\n")
+    with mic_session():
+        wav, raw = record(config.QUESTION_SECONDS, denoise=True, tag="mictest",
+                          stop_on_silence=True, keep_raw=True)
+    rms = wav_rms(wav)
+    ratio, seconds = vad.speech_stats(wav)
+    text = transcribe(wav, config.WHISPER_MODEL)
+    for leftover in (raw,):
+        if leftover and os.path.exists(leftover):
+            try:
+                os.remove(leftover)
+            except OSError:
+                pass
+
+    loud_ok = rms >= config.QUESTION_RMS_THRESHOLD
+    vad_ok = ratio >= config.VAD_MIN_SPEECH_RATIO and seconds >= config.VAD_MIN_SPEECH_SECONDS
+    text_ok = bool(text) and not is_noise(text)
+    print(f"  loudness   rms={rms:.0f}  needs >= {config.QUESTION_RMS_THRESHOLD}"
+          f"   {'PASS' if loud_ok else 'FAIL'}")
+    print(f"  speech vad ratio={ratio:.0%} ({seconds:.1f}s)  needs >= "
+          f"{config.VAD_MIN_SPEECH_RATIO:.0%} and {config.VAD_MIN_SPEECH_SECONDS}s"
+          f"   {'PASS' if vad_ok else 'FAIL'}")
+    print(f"  transcript {text!r}   {'PASS' if text_ok else 'FAIL'}")
+    if loud_ok and vad_ok and text_ok:
+        print("\nAll gates pass -- your speech reaches the assistant.")
+        return
+    print("\nSuggested config.py changes:")
+    if not loud_ok:
+        print(f"  QUESTION_RMS_THRESHOLD = {max(200, int(rms * 0.6))}   "
+              f"(currently {config.QUESTION_RMS_THRESHOLD}, above your speaking level)")
+    if not vad_ok:
+        print(f"  VAD_MIN_SPEECH_RATIO = {max(0.15, round(ratio * 0.6, 2))}   "
+              f"(currently {config.VAD_MIN_SPEECH_RATIO})")
+    if not text_ok:
+        print("  speech wasn't transcribed -- check the mic gain/position first")
 
 
 def calibrate_noise(rounds=3):

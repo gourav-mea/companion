@@ -8,15 +8,19 @@ import threading
 
 from . import config
 
+# Importing gpiozero can succeed while constructing a device still fails (no
+# pin factory, e.g. lgpio missing on a Pi 5, or no /dev/gpiomem access), so the
+# devices are built inside the guard too -- GPIO is optional, never fatal.
 try:
     from gpiozero import LED, Button
+    led = LED(config.LED_PIN)
+    talk_button = Button(config.TALK_PIN, pull_up=True)
+    mute_switch = Button(config.MUTE_PIN, pull_up=True)
     HAVE_GPIO = True
-except Exception:
+except Exception as _gpio_exc:
+    print(f"gpio unavailable ({_gpio_exc}); LED, mute toggle and button are disabled")
+    led = talk_button = mute_switch = None
     HAVE_GPIO = False
-
-led = LED(config.LED_PIN) if HAVE_GPIO else None
-talk_button = Button(config.TALK_PIN, pull_up=True) if HAVE_GPIO else None
-mute_switch = Button(config.MUTE_PIN, pull_up=True) if HAVE_GPIO else None
 
 # Pressing the button is a manual wake: it sets this flag, which the main loop
 # checks between listening snippets.

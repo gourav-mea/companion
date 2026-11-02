@@ -93,6 +93,8 @@ USE_OPENWAKEWORD = True
 OWW_WAKE = ["hey_jarvis"]
 OWW_THRESHOLD = 0.5
 OWW_FRAME = 1280
+WAKE_DEBUG = False   # print the detector's running best score -- the only way to tell
+                     # "it can't hear me" apart from "it hears me but scores too low"
 
 # ---- conversation -------------------------------------------------------------
 GOODBYE_WORDS = ["goodbye", "good bye", "bye bye", "go to sleep", "sleep now",

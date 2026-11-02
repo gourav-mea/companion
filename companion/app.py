@@ -35,7 +35,8 @@ def _report_optional_deps():
     for module, feature in (("resemblyzer", "speaker recognition (personalization/memory)"),
                             ("webrtcvad", "speech-vs-noise gate"),
                             ("openwakeword", "fast wake word"),
-                            ("numpy", "fast wake word")):
+                            ("numpy", "fast wake word"),
+                            ("gpiozero", "LED + mute toggle + press-to-talk button")):
         try:
             __import__(module)
         except Exception:
@@ -135,6 +136,8 @@ def run_cli():
         cli.eval_opportunities()
     elif args and args[0] == "calibrate-noise":
         cli.calibrate_noise()
+    elif args and args[0] == "test-mic":
+        cli.test_mic_cli()
     elif args and args[0] == "users":
         cli.list_users_cli()
     elif args and args[0] == "forget-user":
