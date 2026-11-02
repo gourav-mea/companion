@@ -247,6 +247,9 @@ def _conversation_loop():
                 os.remove(raw_wav)
             except OSError:
                 pass
+        who = state.current_user["display_name"] if state.current_user else "guest"
+        print(f"(speaker: {who}  score={state.last_match_score:.3f} "
+              f"threshold={config.SPEAKER_MATCH_THRESHOLD})")
         if config.DEBUG_TIMING:
             print(f"  [time] asr {time.time() - _t:.1f}s")
         if question and (rms < config.QUESTION_RMS_THRESHOLD or utilities.is_noise(question)):

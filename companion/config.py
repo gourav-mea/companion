@@ -197,8 +197,10 @@ LANG_FILE = os.path.join(WORK, "lang.txt")
 # Backend is swappable: "resemblyzer" (default, light) or "speechbrain_ecapa"
 # (heavier, more accurate). See companion/identity/embeddings.py.
 SPEAKER_BACKEND = "resemblyzer"
-SPEAKER_MATCH_THRESHOLD = 0.75   # cosine similarity needed to accept a voice match
-                                 # run `talk.py test-voice` to see your real scores
+SPEAKER_MATCH_THRESHOLD = 0.65   # cosine similarity needed to accept a voice match.
+                                 # Measured 0.77 via `talk.py test-voice` -- 0.75 left only
+                                 # 0.02 of headroom, so normal turn-to-turn variation dropped
+                                 # live clips below it. Lower = more false matches between people.
 ENROLL_SAMPLES = 5               # voice clips recorded per enrollment
 ENROLL_SAMPLE_SECONDS = 4
 IDENTITY_DB = os.path.join(WORK, "identity.db")

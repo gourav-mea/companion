@@ -30,6 +30,10 @@ def set_status(state_name, heard="", reply="", egress=""):
         with open(config.STATUS_FILE, "w") as f:
             json.dump({"state": state_name, "heard": heard, "reply": reply,
                        "egress": egress, "health": state.offline_parts, "url": state.pi_url,
+                       "speaker": (state.current_user["display_name"]
+                                  if state.current_user else "guest"),
+                       "match_score": round(state.last_match_score, 3),
+                       "match_threshold": config.SPEAKER_MATCH_THRESHOLD,
                        "time": time.time()}, f)
     except Exception:
         pass
