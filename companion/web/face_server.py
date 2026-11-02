@@ -14,10 +14,24 @@ import time
 from .. import config, state
 
 
+class _QuietHandler(http.server.SimpleHTTPRequestHandler):
+    """A browser navigating away mid-response raises BrokenPipeError, which
+    the default handler dumps as a full traceback -- pure noise that buries
+    the logs that matter."""
+
+    def log_message(self, *args, **kwargs):
+        pass
+
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+
+
 def start_face_server():
     try:
-        handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=config.WORK)
-        handler.log_message = lambda *a, **k: None
+        handler = functools.partial(_QuietHandler, directory=config.WORK)
         httpd = socketserver.TCPServer(("", config.FACE_PORT), handler)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         print(f"face: http://localhost:{config.FACE_PORT}/face.html")

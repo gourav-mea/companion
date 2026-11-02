@@ -43,7 +43,24 @@ def get_oww():
         return None
     try:
         from openwakeword.model import Model
-        _oww_model = Model(wakeword_models=list(config.OWW_WAKE))
+        try:
+            from openwakeword.utils import download_models
+            download_models()   # no-op once the bundled models are cached
+        except Exception:
+            pass
+        # The keyword changed across openwakeword releases, and passing an
+        # unknown one surfaces as a confusing AudioFeatures TypeError.
+        last_exc = None
+        for attempt in (lambda: Model(wakeword_models=list(config.OWW_WAKE)),
+                        lambda: Model(wakeword_model_names=list(config.OWW_WAKE)),
+                        lambda: Model()):
+            try:
+                _oww_model = attempt()
+                break
+            except TypeError as exc:
+                last_exc = exc
+        if _oww_model is None and last_exc is not None:
+            raise last_exc
         print(f"wake: openWakeWord ({', '.join(config.OWW_WAKE)})")
     except Exception as exc:
         print(f"openWakeWord unavailable ({exc}); using the Whisper wake word")
