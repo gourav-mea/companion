@@ -89,13 +89,18 @@ WAKE_ENERGY_GATE = True
 WAKE_RMS_THRESHOLD = 350
 DEBUG_TIMING = False
 
-USE_OPENWAKEWORD = True
+USE_OPENWAKEWORD = False   # False = Whisper wake path: slower and heavier, but it
+                           # transcribes every window so `heard: ...` shows exactly
+                           # what the device picked up. openWakeWord only scores raw
+                           # audio, so there is nothing to log while idle.
 OWW_WAKE = ["hey_jarvis"]
 OWW_THRESHOLD = 0.7   # 0.5 is openwakeword's permissive default and fires on its own.
                       # Raise toward 0.8 if it still self-wakes, lower if it misses you.
 OWW_FRAME = 1280
 WAKE_DEBUG = False   # print the detector's running best score -- the only way to tell
                      # "it can't hear me" apart from "it hears me but scores too low"
+WAKE_LED_PULSE = True   # brief blink while wake-listening, so "armed" is visible.
+                        # Solid LED still means "capturing your question".
 
 # ---- conversation -------------------------------------------------------------
 GOODBYE_WORDS = ["goodbye", "good bye", "bye bye", "go to sleep", "sleep now",

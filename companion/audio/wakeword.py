@@ -29,7 +29,9 @@ def hears_wake():
     text = transcribe(wav, wake_model()).lower()
     from ..skills.utilities import is_noise
     if is_noise(text):   # whisper's "(dramatic music)" inventions, not speech
-        return False, ""
+        # Still reported so the caller can log what was captured -- hiding it
+        # makes the device look deaf when it is actually hearing noise.
+        return False, text.strip()
     return any(w in text for w in config.WAKE_WORDS), text.strip()
 
 
@@ -93,8 +95,9 @@ def openwakeword_loop(switch_enabled, drain_reminders, on_wake):
             ["arecord", "-q", "-D", config.MIC_DEVICE, "-f", "S16_LE", "-r", "16000",
              "-c", "1", "-t", "raw"],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)   # terminate() => noisy EINTR otherwise
-        if state.led:
-            state.led.on()   # openWakeWord streams the mic itself, bypassing record()'s LED
+        if state.led and config.WAKE_LED_PULSE:
+            # Pulse, not solid: record() uses solid for "capturing your question".
+            state.led.blink(on_time=0.05, off_time=1.5, background=True)
         detected = False
         best_seen = 0.0
         last_report = time.time()
@@ -128,7 +131,7 @@ def openwakeword_loop(switch_enabled, drain_reminders, on_wake):
                     detected = True
                     break
         finally:
-            if state.led:
+            if state.led and config.WAKE_LED_PULSE:
                 state.led.off()
             proc.terminate()
             try:
@@ -136,6 +139,7 @@ def openwakeword_loop(switch_enabled, drain_reminders, on_wake):
             except Exception:
                 pass
         if detected:
+            print(f"wake detected (score {best_seen:.2f})")
             try:
                 model.reset()   # clear the detector's rolling buffer
             except Exception:

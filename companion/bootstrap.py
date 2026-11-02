@@ -18,9 +18,11 @@ def bootstrap():
         if not os.path.exists(path):
             with open(path, "w") as f:
                 f.write(text)
-    if not os.path.exists(config.FACE_FILE):
-        with open(config.FACE_FILE, "w") as f:
-            f.write(FACE_HTML)
+    # Always rewritten, never "only if missing": it's generated from
+    # data/face_html.py, so a stale copy on disk silently hides every UI
+    # change. Policies above ARE user-editable, hence the existence check.
+    with open(config.FACE_FILE, "w") as f:
+        f.write(FACE_HTML)
     conn = sqlite3.connect(config.MEM_DB)
     conn.execute("CREATE TABLE IF NOT EXISTS notes (ts REAL, text TEXT, vec TEXT)")
     try:
