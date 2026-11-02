@@ -21,9 +21,30 @@ _SAFE_OPS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mu
              ast.USub: operator.neg}
 
 
+_BRACKETED = re.compile(r"^[\[\(\*♪♫~\-_.’' ]*$")
+_PUNCT_ONLY = re.compile(r"^[^a-z0-9]*$")
+
+
 def is_noise(text):
-    t = text.strip().lower().strip(" .!?")
-    return len(t) < config.MIN_QUESTION_CHARS or t in config.NOISE_TOKENS
+    """True if a transcript is almost certainly NOT a real spoken question.
+
+    Whisper hallucinates confident, plausible sentences when fed non-speech
+    audio (wind, laughter, a TV), so an empty-transcript check isn't enough --
+    we also have to recognise its stock inventions by name.
+    """
+    t = text.strip().lower().strip(" .!?,-…")
+    t = re.sub(r"\s+", " ", t)
+    if len(t) < config.MIN_QUESTION_CHARS:
+        return True
+    if _PUNCT_ONLY.match(t) or _BRACKETED.match(t):
+        return True
+    if t in config.NOISE_TOKENS:
+        return True
+    # Bracketed sound tags like [music], (laughter), [blank_audio].
+    stripped = t.strip("[]()")
+    if stripped != t and stripped in config.NOISE_TOKENS:
+        return True
+    return False
 
 
 def with_context(system, history):

@@ -100,6 +100,8 @@ def run_cli():
         cli.enroll_cli(" ".join(args[1:]) or "User")
     elif args and args[0] == "eval-opportunities":
         cli.eval_opportunities()
+    elif args and args[0] == "calibrate-noise":
+        cli.calibrate_noise()
     elif args and args[0] in ("--text", "-t"):
         cli.cli_text(" ".join(args[1:]) or "what can you do")
     else:

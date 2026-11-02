@@ -54,6 +54,23 @@ def low_confidence(rms, text):
     return rms < config.CONFIRM_RMS_THRESHOLD or looks_garbled(text)
 
 
+def looks_truncated(text):
+    """True if a transcript looks cut off mid-thought, meaning the recording
+    probably ended during a natural thinking pause rather than at the real
+    end of the question."""
+    if not config.CONTINUATION_ENABLED:
+        return False
+    t = text.strip()
+    if not t:
+        return False
+    if t[-1] in ".!?":
+        return False
+    words = re.findall(r"[a-z']+", t.lower())
+    if not words:
+        return False
+    return words[-1] in config.CONTINUATION_DANGLING_WORDS
+
+
 def route(question, speaker=None):
     """Decide how to answer for the given (optionally recognized) speaker.
 

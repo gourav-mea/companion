@@ -122,6 +122,24 @@ def doctor():
         shadow = "shadow mode ON" if config.OPPORTUNITY_SHADOW_MODE else "LIVE (speaking suggestions)"
         return f"{config.OPPORTUNITY_MODEL} -> {reply[:20]} ({shadow})"
 
+    def speech_gate():
+        if not config.VAD_ENABLED:
+            return "disabled (config.VAD_ENABLED = False)"
+        import webrtcvad   # noqa: F401 -- presence check only
+        return f"webrtcvad (aggressiveness {config.VAD_AGGRESSIVENESS})"
+
+    def endpointing():
+        """Without sox every recording is a fixed length, so the user gets cut
+        off mid-sentence no matter what SILENCE_SECS says."""
+        import shutil as _shutil
+        if not config.SILENCE_STOP:
+            return "fixed-length (config.SILENCE_STOP = False)"
+        if not _shutil.which("sox"):
+            raise RuntimeError(
+                f"sox NOT installed -- recordings are a fixed {config.QUESTION_SECONDS}s and will "
+                f"cut people off mid-sentence. Install it: sudo apt install sox")
+        return f"sox dynamic (stops after {config.SILENCE_SECS}s quiet, max {config.MAX_RECORD_SECONDS}s)"
+
     print("checking the companion's pieces\n")
     check("whisper-cli", whisper_bin)
     check("whisper model", whisper_mdl)
@@ -137,6 +155,8 @@ def doctor():
     check("enrolled users", lambda: f"{len(identity_repository.list_users())} users")
     check("admin password", admin_password)
     check("barge-in calibration", barge_in_calibration)
+    check("speech gate (vad)", speech_gate)
+    check("endpointing (sox)", endpointing)
     check("opportunity engine", opportunity_engine)
     print("\nfailures above are not fatal; the device degrades around them.")
 
@@ -159,6 +179,32 @@ def eval_opportunities():
              f"conf={decision.confidence:.2f} category={decision.category}  -- {text}")
     total = len(OPPORTUNITY_EVAL_SET)
     print(f"\n{correct}/{total} correct")
+
+
+def calibrate_noise(rounds=3):
+    """Sample the room's ambient sound and recommend a QUESTION_RMS_THRESHOLD.
+
+    Guessing this number is useless -- it depends entirely on your mic, gain
+    and room. Stay SILENT while this runs.
+    """
+    bootstrap()
+    from .audio import vad
+    print("Stay quiet -- sampling ambient room noise...\n")
+    readings = []
+    for i in range(rounds):
+        rms, speech_ratio = vad.ambient_rms_sample()
+        readings.append(rms)
+        print(f"  sample {i + 1}: rms={rms:.0f}  speech-like frames={speech_ratio:.0%}")
+    worst = max(readings)
+    recommended = int(worst * 1.8) + 100
+    print(f"\nloudest ambient reading: {worst:.0f}")
+    print(f"current QUESTION_RMS_THRESHOLD: {config.QUESTION_RMS_THRESHOLD}")
+    print(f"recommended QUESTION_RMS_THRESHOLD: {recommended}")
+    if recommended > config.QUESTION_RMS_THRESHOLD:
+        print("\n-> Your room is louder than the current threshold allows; raise it in "
+              "config.py or background noise will keep being treated as speech.")
+    else:
+        print("\n-> Current threshold already sits above your ambient noise floor.")
 
 
 def set_admin_password(password):

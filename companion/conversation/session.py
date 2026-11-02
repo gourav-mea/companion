@@ -11,6 +11,7 @@ import time
 from .. import config, state
 from ..audio.capture import record, wav_rms
 from ..audio.playback import speak, StreamingSpeaker
+from ..audio import vad
 from ..identity import presence, verifier
 from ..identity.enrollment import enroll_user
 from ..llm.client import chat, chat_stream, offline_message
@@ -179,6 +180,7 @@ def _conversation_loop():
     state.wake_event.clear()
     speak("Yes?")
     idle = 0
+    noise_rounds = 0
     greeted = False
     history = []
     while True:
@@ -222,24 +224,56 @@ def _conversation_loop():
         identify_thread = threading.Thread(target=_identify, args=(id_wav,), daemon=True)
         identify_thread.start()
         _t = time.time()
-        question = transcribe(wav, config.WHISPER_MODEL)
-        identify_thread.join()
+        # Speech-presence gate BEFORE transcription: whisper invents plausible
+        # sentences from wind/laughter, so never give it non-speech to chew on.
+        if not vad.has_speech(wav):
+            identify_thread.join()
+            if os.path.exists(wav):
+                try:
+                    os.remove(wav)
+                except OSError:
+                    pass
+            question = ""
+        else:
+            question = transcribe(wav, config.WHISPER_MODEL)
+            identify_thread.join()
         if config.DEBUG_TIMING:
             print(f"  [time] asr {time.time() - _t:.1f}s")
         if question and (rms < config.QUESTION_RMS_THRESHOLD or utilities.is_noise(question)):
             print(f"(ignored: rms={rms:.0f} text={question!r})")
             question = ""
+        if question and router.looks_truncated(question):
+            # Ended on a dangling word -- they were probably still thinking.
+            set_status("listening", heard=question)
+            more_wav = record(config.CONTINUATION_SECONDS, denoise=True,
+                             tag="continue", stop_on_silence=True)
+            if vad.has_speech(more_wav):
+                rest = transcribe(more_wav, config.WHISPER_MODEL)
+                if rest and not utilities.is_noise(rest):
+                    question = f"{question} {rest}".strip()
+            elif os.path.exists(more_wav):
+                try:
+                    os.remove(more_wav)
+                except OSError:
+                    pass
+            set_status("thinking")
         if not question:
             idle += 1
+            noise_rounds += 1
             set_status("idle")
-            if idle == config.CONVO_STILL_THERE_ROUND:
+            if noise_rounds == 1 and config.NOISE_ACK_ONCE and rms >= config.QUESTION_RMS_THRESHOLD:
+                # Something was audible but wasn't a question -- say so once,
+                # then stay quiet however long the room keeps making noise.
+                speak(config.NOISE_ACK_TEXT)
+            elif idle == config.CONVO_STILL_THERE_ROUND:
                 speak("Still there?")
-            if idle >= config.CONVO_IDLE_ROUNDS:
+            if noise_rounds >= config.NOISE_SLEEP_AFTER or idle >= config.CONVO_IDLE_ROUNDS:
                 speak("Going back to sleep. Say hi companion to wake me.")
                 set_status("idle")
                 return
             continue
         idle = 0
+        noise_rounds = 0
         print("You said:", question)
         if is_goodbye(question):
             set_status("idle", heard=question, reply="Goodbye.")

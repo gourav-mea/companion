@@ -1,5 +1,9 @@
 requests
 
+# Speech-vs-noise gate: stops wind/laughter/TV being transcribed as questions
+# (whisper hallucinates confident sentences from non-speech audio).
+webrtcvad
+
 # Optional: speaker recognition backend (default config.SPEAKER_BACKEND).
 # Install separately -- it pulls in torch and is not needed for core features.
 # resemblyzer

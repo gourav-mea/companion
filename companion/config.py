@@ -28,9 +28,22 @@ RECORD_SECONDS = 6
 DENOISE = "highpass=f=200,lowpass=f=3000"
 MAX_RECORD_SECONDS = 10
 SILENCE_STOP = True
-SILENCE_SECS = 0.6              # trailing quiet before a recording ends (was 0.8 -- snappier cutoff)
+SILENCE_SECS = 1.2             # trailing quiet before a recording ends. 0.6 cut people off
+                               # mid-sentence on natural thinking pauses; this trades a little
+                               # latency for not truncating questions.
 SILENCE_THRESH = "2%"
 WHISPER_THREADS = 4
+
+# If a transcript looks cut off mid-thought (no terminal punctuation, ends on
+# a dangling conjunction/preposition), listen briefly for the rest instead of
+# answering half a question.
+CONTINUATION_ENABLED = True
+CONTINUATION_SECONDS = 3
+CONTINUATION_DANGLING_WORDS = (
+    "and", "but", "or", "so", "because", "if", "when", "while", "that", "which",
+    "the", "a", "an", "to", "of", "for", "in", "on", "at", "with", "about",
+    "is", "was", "my", "your", "i", "um", "uh",
+)
 
 # Persistent whisper.cpp server mode: avoids reloading the model from disk on
 # every question (the single biggest per-turn latency cost). Off by default
@@ -82,10 +95,36 @@ GUARDRAILS_ENABLED = True
 GUARD_USE_LLM_JUDGE = False
 
 # ---- capture quality ------------------------------------------------------------
-QUESTION_RMS_THRESHOLD = 300
+QUESTION_RMS_THRESHOLD = 300   # run `talk.py calibrate-noise` to tune this for YOUR room
 MIN_QUESTION_CHARS = 2
-NOISE_TOKENS = {"you", "thank you", "thanks for watching", "bye", "[blank_audio]",
-                "okay", "ok", "um", "uh"}
+# Whisper's stock hallucinations on non-speech audio -- it invents these
+# confidently from wind/laughter/silence, so they must be named explicitly.
+NOISE_TOKENS = {
+    "you", "thank you", "thank you.", "thanks", "thanks for watching",
+    "thanks for watching!", "thank you for watching", "please subscribe",
+    "subscribe", "like and subscribe", "bye", "bye bye", "goodbye",
+    "[blank_audio]", "blank_audio", "music", "[music]", "(music)",
+    "laughter", "[laughter]", "(laughter)", "applause", "[applause]",
+    "silence", "[silence]", "noise", "[noise]", "inaudible", "[inaudible]",
+    "okay", "ok", "um", "uh", "hmm", "mm", "ah", "oh", "yeah",
+    "the end", "end of video", "see you next time",
+}
+
+# ---- speech-vs-noise gate (VAD) -------------------------------------------------
+# webrtcvad distinguishes actual speech from wind/music/TV, which a loudness
+# check fundamentally cannot. Rejects noise BEFORE paying for transcription.
+VAD_ENABLED = True
+VAD_AGGRESSIVENESS = 2         # 0 = permissive, 3 = most aggressive at calling things non-speech
+VAD_FRAME_MS = 30              # webrtcvad accepts 10, 20 or 30 only
+VAD_MIN_SPEECH_RATIO = 0.25    # fraction of frames that must look like speech
+VAD_MIN_SPEECH_SECONDS = 0.4   # ...and that much speech in absolute terms
+
+# ---- noise backoff ---------------------------------------------------------------
+# Acknowledge noise at most once, then go quiet, then go back to sleep rather
+# than answering the room forever.
+NOISE_ACK_ONCE = True
+NOISE_ACK_TEXT = "I heard something, but I couldn't make out a question."
+NOISE_SLEEP_AFTER = 3          # consecutive noise-only rounds before sleeping
 
 # ---- bluetooth ----------------------------------------------------------------
 BT_MAC = ""
@@ -194,11 +233,13 @@ FACT_CAPTURE_CUES = (
 OPPORTUNITY_ENABLED = True
 OPPORTUNITY_SHADOW_MODE = True     # log what it WOULD suggest, don't speak it -- flip off after reviewing
 OPPORTUNITY_MODEL = "qwen2.5:3b"   # heavier model, used ONLY for the rare "new opportunity" judgment
-OPPORTUNITY_MODEL_KEEP_ALIVE = "0"  # don't keep it resident -- it's used rarely, not every turn
+OPPORTUNITY_MODEL_KEEP_ALIVE = "2m"  # stay resident briefly -- detect() makes 3 back-to-back calls
+                                   # (self-consistency voting); "0" forced a cold reload every single
+                                   # vote, which is what was causing read timeouts on the Pi
 OPPORTUNITY_NUM_CTX = 2048           # bigger context window for the few-shot examples
 OPPORTUNITY_VOTES = 3                 # self-consistency voting sample count for the detect() call
 OPPORTUNITY_CONFIDENCE_THRESHOLD = 0.7
-OPPORTUNITY_CALL_TIMEOUT_SECONDS = 20   # per HTTP call -- bounds the worst case to ~3x this
+OPPORTUNITY_CALL_TIMEOUT_SECONDS = 60   # generous -- first vote may need a cold load on Pi CPU
 OPPORTUNITY_QUEUE_MAXSIZE = 3             # bounded background queue; full => drop, never block/pile up
 OPPORTUNITY_THREAD_TTL_SECONDS = 3600       # abandon an open thread if it goes stale this long
 
