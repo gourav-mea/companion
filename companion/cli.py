@@ -1,6 +1,8 @@
 """CLI utility modes: doctor (dependency check), --text (typed Q&A, no mic),
 and selftest (offline assertions on routing/guardrails/math).
 """
+import os
+
 import requests
 
 from . import config
@@ -179,6 +181,73 @@ def eval_opportunities():
              f"conf={decision.confidence:.2f} category={decision.category}  -- {text}")
     total = len(OPPORTUNITY_EVAL_SET)
     print(f"\n{correct}/{total} correct")
+
+
+def list_users_cli():
+    bootstrap()
+    users = identity_repository.list_users()
+    if not users:
+        print("No enrolled users.")
+        return
+    for u in users:
+        print(f"  id={u['id']}  {u['display_name']}  role={u['role']}  "
+             f"voice samples={u['sample_count']}")
+
+
+def forget_user_cli(name):
+    """Delete an enrolled user and their voice samples, so you can re-enroll
+    cleanly after a bad first enrollment."""
+    bootstrap()
+    if not name:
+        print("usage: talk.py forget-user <display name>")
+        return
+    user = identity_repository.get_user_by_name(name)
+    if not user:
+        print(f"No enrolled user named {name!r}. Use `talk.py users` to list them.")
+        return
+    identity_repository.delete_user(user["id"])
+    print(f"Deleted {user['display_name']} (id={user['id']}) and their voice samples.")
+    print("Re-enroll with: talk.py enroll \"" + user["display_name"] + "\"")
+
+
+def test_voice_cli():
+    """Record a clip and print its similarity to every enrolled user, so
+    SPEAKER_MATCH_THRESHOLD can be set from real numbers instead of guessed.
+    """
+    bootstrap()
+    from .audio.capture import mic_session, record
+    from .identity import repository as ident_repo
+    from .identity.embeddings import cosine, embed_voice
+
+    centroids = ident_repo.get_centroids()
+    if not centroids:
+        print("No enrolled users. Run: talk.py enroll \"Your Name\"")
+        return
+    print(f"Speak normally for ~{config.ENROLL_SAMPLE_SECONDS} seconds...")
+    with mic_session():
+        wav = record(config.ENROLL_SAMPLE_SECONDS, denoise=False, tag="voicetest",
+                     stop_on_silence=True)
+    vector = embed_voice(wav)
+    if os.path.exists(wav):
+        try:
+            os.remove(wav)
+        except OSError:
+            pass
+    if vector is None:
+        print("Could not get a voice embedding -- the mic captured nothing usable.")
+        return
+    print(f"\nthreshold: {config.SPEAKER_MATCH_THRESHOLD}\n")
+    best = 0.0
+    for user_id, (name, centroid) in centroids.items():
+        score = cosine(vector, centroid)
+        best = max(best, score)
+        verdict = "MATCH" if score >= config.SPEAKER_MATCH_THRESHOLD else "no match"
+        print(f"  {name} (id={user_id}): {score:.3f}  -> {verdict}")
+    if best < config.SPEAKER_MATCH_THRESHOLD:
+        print(f"\nBest score {best:.3f} is below the threshold, so you'd be treated as a guest "
+              f"(no memory/personalization).\nEither re-enroll, or lower SPEAKER_MATCH_THRESHOLD "
+              f"toward {max(0.5, best - 0.05):.2f} -- but the lower it goes, the more likely "
+              f"someone else gets mistaken for you.")
 
 
 def calibrate_noise(rounds=3):

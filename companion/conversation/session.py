@@ -10,8 +10,8 @@ import time
 
 from .. import config, state
 from ..audio.capture import record, wav_rms
+from ..audio import capture, vad
 from ..audio.playback import speak, StreamingSpeaker
-from ..audio import vad
 from ..identity import presence, verifier
 from ..identity.enrollment import enroll_user
 from ..llm.client import chat, chat_stream, offline_message
@@ -47,12 +47,14 @@ def _capture_interruption():
     may not be who was originally talking.
     """
     set_status("listening")
-    wav = record(config.BARGE_IN_CAPTURE_SECONDS, denoise=True, tag="interrupt", stop_on_silence=True)
+    with capture.mic_session():
+        wav = record(config.BARGE_IN_CAPTURE_SECONDS, denoise=True, tag="interrupt", stop_on_silence=True)
     state.current_user, _score = verifier.identify_speaker(wav)
     text = transcribe(wav, config.WHISPER_MODEL)
     if not text or utilities.is_noise(text):
         speak("Did you say something?")
-        wav2 = record(config.BARGE_IN_CLARIFY_SECONDS, denoise=True, tag="interrupt_confirm", stop_on_silence=True)
+        with capture.mic_session():
+            wav2 = record(config.BARGE_IN_CLARIFY_SECONDS, denoise=True, tag="interrupt_confirm", stop_on_silence=True)
         state.current_user, _score = verifier.identify_speaker(wav2)
         text = transcribe(wav2, config.WHISPER_MODEL)
         if not text or utilities.is_noise(text):
@@ -197,23 +199,26 @@ def _conversation_loop():
             set_status("muted")
             return
         set_status("listening")
-        wav = record(config.QUESTION_SECONDS, denoise=True, tag="input", stop_on_silence=True)
+        with capture.mic_session():
+            wav, raw_wav = record(config.QUESTION_SECONDS, denoise=True, tag="input",
+                                  stop_on_silence=True, keep_raw=True)
         set_status("thinking")
         rms = wav_rms(wav)
         # Speaker ID and transcription both just need to read the clip, so run
-        # them concurrently instead of back-to-back. identify_speaker gets its
-        # own copy of the file -- transcribe() deletes the original when done,
-        # and with the model now potentially server-backed (fast), there's no
-        # guarantee the copy step would still win that race otherwise.
-        id_wav = wav + ".id.wav"
+        # them concurrently instead of back-to-back. Speaker ID gets the RAW
+        # clip: the denoise band-pass strips the upper harmonics voice
+        # embeddings rely on, and enrollment records raw -- comparing a
+        # filtered vector against a raw centroid never matches.
+        id_wav = raw_wav + ".id.wav"
         try:
-            shutil.copy(wav, id_wav)
+            shutil.copy(raw_wav, id_wav)
         except OSError:
             id_wav = None
 
         def _identify(path):
             try:
-                state.current_user, _score = verifier.identify_speaker(path)
+                state.current_user, score = verifier.identify_speaker(path)
+                state.last_match_score = score
             finally:
                 if path and os.path.exists(path):
                     try:
@@ -237,6 +242,11 @@ def _conversation_loop():
         else:
             question = transcribe(wav, config.WHISPER_MODEL)
             identify_thread.join()
+        if raw_wav != wav and os.path.exists(raw_wav):
+            try:
+                os.remove(raw_wav)
+            except OSError:
+                pass
         if config.DEBUG_TIMING:
             print(f"  [time] asr {time.time() - _t:.1f}s")
         if question and (rms < config.QUESTION_RMS_THRESHOLD or utilities.is_noise(question)):
@@ -245,8 +255,9 @@ def _conversation_loop():
         if question and router.looks_truncated(question):
             # Ended on a dangling word -- they were probably still thinking.
             set_status("listening", heard=question)
-            more_wav = record(config.CONTINUATION_SECONDS, denoise=True,
-                             tag="continue", stop_on_silence=True)
+            with capture.mic_session():
+                more_wav = record(config.CONTINUATION_SECONDS, denoise=True,
+                                 tag="continue", stop_on_silence=True)
             if vad.has_speech(more_wav):
                 rest = transcribe(more_wav, config.WHISPER_MODEL)
                 if rest and not utilities.is_noise(rest):
@@ -301,7 +312,8 @@ def _conversation_loop():
         if router.low_confidence(rms, question):
             speak(f"I think you said. {question}. Is that right?")
             set_status("listening", heard=question, reply=f"Did you say: {question}?")
-            confirm_wav = record(config.QUESTION_SECONDS, denoise=True, tag="confirm", stop_on_silence=True)
+            with capture.mic_session():
+                confirm_wav = record(config.QUESTION_SECONDS, denoise=True, tag="confirm", stop_on_silence=True)
             if router.is_negative(transcribe(confirm_wav, config.WHISPER_MODEL)):
                 speak("Sorry about that. Please say it again.")
                 continue
@@ -322,7 +334,8 @@ def _conversation_loop():
             try:
                 if kind == "enroll":
                     def _record_fn(seconds, tag):
-                        return record(seconds, denoise=False, tag=tag)
+                        with capture.mic_session():
+                            return record(seconds, denoise=False, tag=tag, stop_on_silence=True)
                     ok, msg = enroll_user(payload, _record_fn, speak_fn=speak)
                     answer = msg
                     set_status("speaking", heard=current_question, reply=answer)

@@ -37,6 +37,8 @@ last_answer = ""
 # Set each turn by speaker verification: {"id": int, "display_name": str} or
 # None for an unrecognized/guest speaker. Reset at the start of every turn.
 current_user = None
+# Cosine similarity from the most recent speaker-ID attempt, for diagnostics.
+last_match_score = 0.0
 # A memory-confirmation question ready to be spoken at the next safe gap
 # (set by a background fact-capture thread, never spoken from that thread
 # directly -- avoids talking over/under a recording in progress).
@@ -47,6 +49,15 @@ conversation_active = False
 # A pending trivia question awaiting an answer on the next turn (see
 # intents/trivia_cmd.py), or None.
 pending_trivia = None
+
+# ---- microphone ownership ---------------------------------------------------
+# Only one process may hold the ALSA capture device at a time. The wake-word
+# listener streams from it continuously, so anything else needing the mic
+# (a question, an enrollment from the admin UI) must ask it to let go first:
+# set mic_pause, wait for mic_released, then take mic_lock.
+mic_lock = threading.RLock()
+mic_pause = threading.Event()
+mic_released = threading.Event()
 
 
 def switch_enabled():

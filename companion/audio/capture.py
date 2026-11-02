@@ -2,6 +2,7 @@
 loudness (used by the silence/noise gates elsewhere).
 """
 import array
+import contextlib
 import os
 import shutil
 import subprocess
@@ -10,7 +11,34 @@ import wave
 from .. import config, state
 
 
-def record(seconds, denoise=True, tag="input", stop_on_silence=False):
+@contextlib.contextmanager
+def mic_session(timeout=None):
+    """Exclusive use of the capture device.
+
+    The wake-word listener streams from the mic continuously, so a second
+    recorder would hit a busy ALSA device and silently capture nothing. This
+    asks the listener to let go first, then holds the lock for the duration.
+    """
+    timeout = config.MIC_HANDOVER_TIMEOUT if timeout is None else timeout
+    state.mic_released.clear()
+    state.mic_pause.set()
+    state.mic_released.wait(timeout)
+    try:
+        with state.mic_lock:
+            yield
+    finally:
+        state.mic_pause.clear()
+        state.mic_released.clear()
+
+
+def record(seconds, denoise=True, tag="input", stop_on_silence=False, keep_raw=False):
+    """Record a clip; returns the path, or (denoised, raw) when keep_raw.
+
+    The denoise filter is a 200-3000Hz band-pass: good for speech recognition,
+    bad for speaker identification (it strips the upper harmonics voice
+    embeddings depend on), which is why callers doing speaker ID ask for the
+    raw file instead.
+    """
     raw = os.path.join(config.WORK, f"{tag}_raw.wav")
     wav = os.path.join(config.WORK, f"{tag}.wav")
     for f in (raw, wav):
@@ -23,31 +51,41 @@ def record(seconds, denoise=True, tag="input", stop_on_silence=False):
     if state.led:
         state.led.on()
     used_sox = False
-    if stop_on_silence and config.SILENCE_STOP and shutil.which("sox"):
-        # Starts when you speak, stops after SILENCE_SECS of quiet, capped at MAX.
-        try:
-            subprocess.run(
-                ["sox", "-q", "-t", "alsa", config.MIC_DEVICE, "-r", "16000", "-c", "1", "-b", "16", raw,
-                 "silence", "1", "0.1", config.SILENCE_THRESH, "1", str(config.SILENCE_SECS), config.SILENCE_THRESH,
-                 "trim", "0", str(config.MAX_RECORD_SECONDS)],
-                timeout=config.MAX_RECORD_SECONDS + 3, capture_output=True, check=False)
-            used_sox = os.path.exists(raw)
-        except Exception:
-            used_sox = False
-    if not used_sox:
-        subprocess.run(["arecord", "-q", "-D", config.MIC_DEVICE, "-f", "S16_LE", "-r", "16000",
-                        "-c", "1", "-d", str(seconds), raw], check=False)
-    if state.led:
-        state.led.off()
+    try:
+        if stop_on_silence and config.SILENCE_STOP and shutil.which("sox"):
+            # Starts when you speak, stops after SILENCE_SECS of quiet, capped at MAX.
+            try:
+                res = subprocess.run(
+                    ["sox", "-q", "-t", "alsa", config.MIC_DEVICE, "-r", "16000", "-c", "1", "-b", "16", raw,
+                     "silence", "1", "0.1", config.SILENCE_THRESH, "1", str(config.SILENCE_SECS), config.SILENCE_THRESH,
+                     "trim", "0", str(config.MAX_RECORD_SECONDS)],
+                    timeout=config.MAX_RECORD_SECONDS + 3, capture_output=True, check=False)
+                used_sox = os.path.exists(raw)
+                if not used_sox and res.stderr:
+                    # A busy capture device looks exactly like silence otherwise.
+                    print("sox capture failed:", res.stderr.decode("utf-8", "replace").strip()[:200])
+            except Exception as exc:
+                print("sox capture failed:", exc)
+                used_sox = False
+        if not used_sox:
+            res = subprocess.run(["arecord", "-q", "-D", config.MIC_DEVICE, "-f", "S16_LE", "-r", "16000",
+                                  "-c", "1", "-d", str(seconds), raw], capture_output=True, check=False)
+            if not os.path.exists(raw) and res.stderr:
+                print("arecord capture failed:", res.stderr.decode("utf-8", "replace").strip()[:200])
+    finally:
+        if state.led:
+            state.led.off()
     if not denoise:
-        return raw
+        return (raw, raw) if keep_raw else raw
     try:
         subprocess.run(["ffmpeg", "-y", "-i", raw, "-af", config.DENOISE, wav],
                        capture_output=True, check=False)
     except Exception:
-        return raw
+        return (raw, raw) if keep_raw else raw
     if not os.path.exists(wav):
-        return raw
+        return (raw, raw) if keep_raw else raw
+    if keep_raw:
+        return wav, raw
     try:
         os.remove(raw)
     except OSError:

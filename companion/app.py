@@ -102,6 +102,12 @@ def run_cli():
         cli.eval_opportunities()
     elif args and args[0] == "calibrate-noise":
         cli.calibrate_noise()
+    elif args and args[0] == "users":
+        cli.list_users_cli()
+    elif args and args[0] == "forget-user":
+        cli.forget_user_cli(" ".join(args[1:]))
+    elif args and args[0] == "test-voice":
+        cli.test_voice_cli()
     elif args and args[0] in ("--text", "-t"):
         cli.cli_text(" ".join(args[1:]) or "what can you do")
     else:

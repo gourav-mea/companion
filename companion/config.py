@@ -34,6 +34,10 @@ SILENCE_SECS = 1.2             # trailing quiet before a recording ends. 0.6 cut
 SILENCE_THRESH = "2%"
 WHISPER_THREADS = 4
 
+# How long to wait for the wake-word listener to let go of the capture device
+# before recording anyway (only one process can hold ALSA at a time).
+MIC_HANDOVER_TIMEOUT = 3.0
+
 # If a transcript looks cut off mid-thought (no terminal punctuation, ends on
 # a dangling conjunction/preposition), listen briefly for the rest instead of
 # answering half a question.
@@ -95,7 +99,8 @@ GUARDRAILS_ENABLED = True
 GUARD_USE_LLM_JUDGE = False
 
 # ---- capture quality ------------------------------------------------------------
-QUESTION_RMS_THRESHOLD = 300   # run `talk.py calibrate-noise` to tune this for YOUR room
+QUESTION_RMS_THRESHOLD = 950   # measured: room floor ~477. Re-run `talk.py calibrate-noise`
+                               # if you move the device or change the mic/gain.
 MIN_QUESTION_CHARS = 2
 # Whisper's stock hallucinations on non-speech audio -- it invents these
 # confidently from wind/laughter/silence, so they must be named explicitly.
@@ -114,9 +119,10 @@ NOISE_TOKENS = {
 # webrtcvad distinguishes actual speech from wind/music/TV, which a loudness
 # check fundamentally cannot. Rejects noise BEFORE paying for transcription.
 VAD_ENABLED = True
-VAD_AGGRESSIVENESS = 2         # 0 = permissive, 3 = most aggressive at calling things non-speech
+VAD_AGGRESSIVENESS = 3         # 0 = permissive, 3 = most aggressive at calling things non-speech
 VAD_FRAME_MS = 30              # webrtcvad accepts 10, 20 or 30 only
-VAD_MIN_SPEECH_RATIO = 0.25    # fraction of frames that must look like speech
+VAD_MIN_SPEECH_RATIO = 0.6     # measured: a SILENT room still scores 14-29% speech-like frames,
+                               # so anything at/below ~0.3 would wave ambient noise straight through
 VAD_MIN_SPEECH_SECONDS = 0.4   # ...and that much speech in absolute terms
 
 # ---- noise backoff ---------------------------------------------------------------
@@ -186,7 +192,8 @@ LANG_FILE = os.path.join(WORK, "lang.txt")
 # (heavier, more accurate). See companion/identity/embeddings.py.
 SPEAKER_BACKEND = "resemblyzer"
 SPEAKER_MATCH_THRESHOLD = 0.75   # cosine similarity needed to accept a voice match
-ENROLL_SAMPLES = 3               # voice clips recorded per enrollment
+                                 # run `talk.py test-voice` to see your real scores
+ENROLL_SAMPLES = 5               # voice clips recorded per enrollment
 ENROLL_SAMPLE_SECONDS = 4
 IDENTITY_DB = os.path.join(WORK, "identity.db")
 

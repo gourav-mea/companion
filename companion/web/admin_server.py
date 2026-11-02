@@ -234,12 +234,15 @@ class AdminHandler(http.server.BaseHTTPRequestHandler):
         user = repository.get_user(user_id)
         if not user:
             return self._send_json(404, {"error": "user not found"})
-        from ..audio.capture import record
+        from ..audio.capture import mic_session, record
         from ..audio.playback import speak
         from ..identity.enrollment import enroll_user
 
         def record_fn(seconds, tag):
-            return record(seconds, denoise=False, tag=tag)
+            # The wake-word listener streams the mic continuously; without
+            # taking ownership this records from a busy device and gets nothing.
+            with mic_session():
+                return record(seconds, denoise=False, tag=tag, stop_on_silence=True)
 
         ok, msg = enroll_user(user["display_name"], record_fn, speak_fn=speak)
         return self._send_json(200, {"ok": ok, "message": msg})

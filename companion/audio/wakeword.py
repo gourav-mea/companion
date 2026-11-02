@@ -6,6 +6,7 @@ instead of importing the conversation loop directly, so this module has no
 dependency on the conversation layer (dependency inversion).
 """
 import subprocess
+import time
 
 from .. import config, state
 from ..speech.transcriber import transcribe, wake_model
@@ -16,7 +17,8 @@ _oww_tried = False
 
 
 def hears_wake():
-    wav = capture.record(config.WAKE_SECONDS, denoise=False, tag="wake")
+    with capture.mic_session():
+        wav = capture.record(config.WAKE_SECONDS, denoise=False, tag="wake")
     if config.WAKE_ENERGY_GATE and capture.wav_rms(wav) < config.WAKE_RMS_THRESHOLD:
         import os
         try:
@@ -58,6 +60,13 @@ def openwakeword_loop(switch_enabled, drain_reminders, on_wake):
         return False
     import numpy as np
     while switch_enabled():
+        # Someone else wants the mic (a question, an admin enrollment): stay
+        # out of the way entirely rather than fighting over a busy device.
+        if state.mic_pause.is_set():
+            state.mic_released.set()
+            while state.mic_pause.is_set() and switch_enabled():
+                time.sleep(0.1)
+            continue
         proc = subprocess.Popen(
             ["arecord", "-q", "-D", config.MIC_DEVICE, "-f", "S16_LE", "-r", "16000",
              "-c", "1", "-t", "raw"],
@@ -65,6 +74,8 @@ def openwakeword_loop(switch_enabled, drain_reminders, on_wake):
         detected = False
         try:
             while switch_enabled():
+                if state.mic_pause.is_set():
+                    break   # drop the device; the outer loop signals and waits
                 drain_reminders()
                 if state.wake_event.is_set():
                     state.wake_event.clear()
