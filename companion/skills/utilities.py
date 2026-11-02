@@ -22,6 +22,10 @@ _SAFE_OPS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mu
 
 
 _BRACKETED = re.compile(r"^[\[\(\*♪♫~\-_.’' ]*$")
+# Whisper tags non-speech audio as "(dramatic music)", "[wind howling]",
+# "(cough)" etc -- any transcript wholly wrapped in brackets is a sound
+# description, never a spoken question, whatever words are inside.
+_SOUND_TAG = re.compile(r"^[\[\(].*[\]\)]$")
 _PUNCT_ONLY = re.compile(r"^[^a-z0-9]*$")
 
 
@@ -36,7 +40,7 @@ def is_noise(text):
     t = re.sub(r"\s+", " ", t)
     if len(t) < config.MIN_QUESTION_CHARS:
         return True
-    if _PUNCT_ONLY.match(t) or _BRACKETED.match(t):
+    if _PUNCT_ONLY.match(t) or _BRACKETED.match(t) or _SOUND_TAG.match(t):
         return True
     if t in config.NOISE_TOKENS:
         return True

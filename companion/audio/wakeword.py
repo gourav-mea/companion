@@ -27,6 +27,9 @@ def hears_wake():
             pass
         return False, ""
     text = transcribe(wav, wake_model()).lower()
+    from ..skills.utilities import is_noise
+    if is_noise(text):   # whisper's "(dramatic music)" inventions, not speech
+        return False, ""
     return any(w in text for w in config.WAKE_WORDS), text.strip()
 
 
