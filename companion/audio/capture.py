@@ -234,7 +234,7 @@ def wait_for_barge_in(threshold, chunk_ms, confirm_chunks, is_active):
     bytes_per_chunk = int(rate * (chunk_ms / 1000.0)) * 2   # 16-bit mono
     proc = subprocess.Popen(
         ["arecord", "-q", "-D", config.MIC_DEVICE, "-f", "S16_LE", "-r", str(rate),
-         "-c", "1", "-t", "raw"], stdout=subprocess.PIPE)
+         "-c", "1", "-t", "raw"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     consecutive = 0
     try:
         while is_active():

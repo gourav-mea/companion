@@ -97,8 +97,13 @@ def _greet_and_surface(question):
     any overdue follow-through notes, or a self-enrollment nudge for a
     frequently-heard but unrecognized guest."""
     if state.current_user:
+        name = state.current_user["display_name"]
         if presence.note_presence(state.current_user["id"]):
-            speak(f"Welcome back, {state.current_user['display_name']}!")
+            speak(f"Welcome back, {name}!")
+        elif config.GREET_BY_NAME:
+            # Audible confirmation that voice recognition actually matched --
+            # otherwise a recognized user is indistinguishable from a guest.
+            speak(f"Hi {name.split()[0]}.")
         for rowid, text in memory_notes.due_notes_for(state.current_user["id"], time.strftime("%Y-%m-%d")):
             speak(f"Before we continue -- you asked me to remind you: {text}")
             memory_notes.clear_due(rowid)

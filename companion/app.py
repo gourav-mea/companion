@@ -138,6 +138,8 @@ def run_cli():
         cli.calibrate_noise()
     elif args and args[0] == "test-mic":
         cli.test_mic_cli()
+    elif args and args[0] == "test-gpio":
+        cli.test_gpio_cli()
     elif args and args[0] == "users":
         cli.list_users_cli()
     elif args and args[0] == "forget-user":

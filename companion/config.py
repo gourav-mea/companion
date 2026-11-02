@@ -91,7 +91,8 @@ DEBUG_TIMING = False
 
 USE_OPENWAKEWORD = True
 OWW_WAKE = ["hey_jarvis"]
-OWW_THRESHOLD = 0.5
+OWW_THRESHOLD = 0.7   # 0.5 is openwakeword's permissive default and fires on its own.
+                      # Raise toward 0.8 if it still self-wakes, lower if it misses you.
 OWW_FRAME = 1280
 WAKE_DEBUG = False   # print the detector's running best score -- the only way to tell
                      # "it can't hear me" apart from "it hears me but scores too low"
@@ -107,8 +108,9 @@ GUARDRAILS_ENABLED = True
 GUARD_USE_LLM_JUDGE = False
 
 # ---- capture quality ------------------------------------------------------------
-QUESTION_RMS_THRESHOLD = 950   # measured: room floor ~477. Re-run `talk.py calibrate-noise`
-                               # if you move the device or change the mic/gain.
+QUESTION_RMS_THRESHOLD = 680   # measured: ambient 410-477, speech 911-1375. Sits between the
+                               # two, not below both. Re-run `talk.py calibrate-noise` AND
+                               # `talk.py test-mic` if you move the device or change mic gain.
 MIN_QUESTION_CHARS = 2
 # Whisper's stock hallucinations on non-speech audio -- it invents these
 # confidently from wind/laughter/silence, so they must be named explicitly.
@@ -129,8 +131,8 @@ NOISE_TOKENS = {
 VAD_ENABLED = True
 VAD_AGGRESSIVENESS = 3         # 0 = permissive, 3 = most aggressive at calling things non-speech
 VAD_FRAME_MS = 30              # webrtcvad accepts 10, 20 or 30 only
-VAD_MIN_SPEECH_RATIO = 0.6     # measured: a SILENT room still scores 14-29% speech-like frames,
-                               # so anything at/below ~0.3 would wave ambient noise straight through
+VAD_MIN_SPEECH_RATIO = 0.38    # measured: silence scores 14-29%, real speech 46-53%.
+                               # Must sit between those -- below 0.3 waves ambient noise through.
 VAD_MIN_SPEECH_SECONDS = 0.4   # ...and that much speech in absolute terms
 
 # ---- noise backoff ---------------------------------------------------------------
@@ -219,6 +221,8 @@ PROACTIVE_QUIET_HOURS = (22, 7)  # (start, end) local hour, wraps past midnight
 PROACTIVE_MAX_PER_HOUR = 4       # global cap across every trigger combined
 
 WELCOME_BACK_SECONDS = 6 * 3600          # "Welcome back" if away longer than this
+GREET_BY_NAME = True                     # short "Hi <name>" on every wake when recognized,
+                                         # so a match is audible without waiting 6 hours
 GUEST_ENROLL_OFFER_WINDOW_SECONDS = 600  # guest turns counted within this window
 GUEST_ENROLL_OFFER_THRESHOLD = 3         # offer enrollment after this many guest turns
 GUEST_ENROLL_OFFER_COOLDOWN_SECONDS = 3600

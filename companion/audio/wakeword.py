@@ -92,7 +92,9 @@ def openwakeword_loop(switch_enabled, drain_reminders, on_wake):
         proc = subprocess.Popen(
             ["arecord", "-q", "-D", config.MIC_DEVICE, "-f", "S16_LE", "-r", "16000",
              "-c", "1", "-t", "raw"],
-            stdout=subprocess.PIPE)
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)   # terminate() => noisy EINTR otherwise
+        if state.led:
+            state.led.on()   # openWakeWord streams the mic itself, bypassing record()'s LED
         detected = False
         best_seen = 0.0
         last_report = time.time()
@@ -110,6 +112,11 @@ def openwakeword_loop(switch_enabled, drain_reminders, on_wake):
                     break
                 frame = np.frombuffer(data, dtype=np.int16)
                 scores = model.predict(frame)
+                # Older/newer openwakeword builds may load the whole default
+                # model set; scoring all of them wakes on "alexa" and friends.
+                wanted = {k: v for k, v in (scores or {}).items()
+                          if any(w in str(k) for w in config.OWW_WAKE)}
+                scores = wanted or scores
                 top = max(scores.values()) if scores else 0.0
                 best_seen = max(best_seen, top)
                 if config.WAKE_DEBUG and time.time() - last_report >= 3:
@@ -121,6 +128,8 @@ def openwakeword_loop(switch_enabled, drain_reminders, on_wake):
                     detected = True
                     break
         finally:
+            if state.led:
+                state.led.off()
             proc.terminate()
             try:
                 proc.wait(timeout=2)

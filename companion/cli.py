@@ -280,6 +280,33 @@ def test_voice_cli():
               f"someone else gets mistaken for you.")
 
 
+def test_gpio_cli(seconds=20):
+    """Live view of the pins AS THE APP READS THEM, including the derived
+    switch_enabled() value -- a toggle can read correctly yet still be
+    interpreted backwards by TOGGLE_ON_WHEN_PRESSED.
+    """
+    import time
+    if not state.HAVE_GPIO:
+        print("GPIO unavailable in this process -- see the error printed above.")
+        return
+    print(f"LED_PIN={config.LED_PIN}  MUTE_PIN={config.MUTE_PIN}  TALK_PIN={config.TALK_PIN}")
+    print(f"TOGGLE_ON_WHEN_PRESSED={config.TOGGLE_ON_WHEN_PRESSED}")
+    print("\nFlip the toggle and press the button. The LED blinks each line.\n")
+    for _ in range(int(seconds * 2)):
+        mute = state.mute_switch.is_pressed if state.mute_switch else None
+        talk = state.talk_button.is_pressed if state.talk_button else None
+        if state.led:
+            state.led.toggle()
+        print(f"  mute_pin={mute!s:<5} talk_pin={talk!s:<5} "
+              f"-> switch_enabled={state.switch_enabled()} "
+              f"({'LISTENING' if state.switch_enabled() else 'MUTED'})")
+        time.sleep(0.5)
+    if state.led:
+        state.led.off()
+    print("\nIf the LISTENING/MUTED column is backwards for your switch, "
+          "set TOGGLE_ON_WHEN_PRESSED to the opposite value in config.py.")
+
+
 def test_mic_cli():
     """Record you SPEAKING and report every gate the audio must pass.
 
@@ -320,12 +347,16 @@ def test_mic_cli():
         print("\nAll gates pass -- your speech reaches the assistant.")
         return
     print("\nSuggested config.py changes:")
+    print("  (a threshold must sit BETWEEN your room's ambient level and your speech --")
+    print("   run `talk.py calibrate-noise` for the ambient side before trusting these)")
     if not loud_ok:
         print(f"  QUESTION_RMS_THRESHOLD = {max(200, int(rms * 0.6))}   "
-              f"(currently {config.QUESTION_RMS_THRESHOLD}, above your speaking level)")
+              f"(currently {config.QUESTION_RMS_THRESHOLD}, above your speaking level of {rms:.0f}) "
+              f"-- raise it if that is below your ambient reading")
     if not vad_ok:
         print(f"  VAD_MIN_SPEECH_RATIO = {max(0.15, round(ratio * 0.6, 2))}   "
-              f"(currently {config.VAD_MIN_SPEECH_RATIO})")
+              f"(currently {config.VAD_MIN_SPEECH_RATIO}, your speech scored {ratio:.0%}) "
+              f"-- raise it if that is below your ambient reading")
     if not text_ok:
         print("  speech wasn't transcribed -- check the mic gain/position first")
 
