@@ -142,6 +142,8 @@ def run_cli():
         raise SystemExit(cli.smoke_memory())
     elif args and args[0] == "metrics":
         raise SystemExit(cli.metrics_cli(args[1:]))
+    elif args and args[0] == "seed-demo":
+        raise SystemExit(cli.seed_demo_cli(args[1:]))
     elif args and args[0] == "calibrate-noise":
         cli.calibrate_noise()
     elif args and args[0] == "test-mic":

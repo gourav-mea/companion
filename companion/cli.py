@@ -2,7 +2,8 @@
 selftest (offline assertions on routing/guardrails/math), eval-opportunities
 (proactive-engine precision), smoke-memory (drives a fake multi-turn
 conversation through the context-memory + feedback paths, no mic/speaker), and
-metrics (summarize real-use latency/wake/speaker-ID/mishear logs).
+metrics (summarize real-use latency/wake/speaker-ID/mishear logs), and
+seed-demo (populate a user with rich data to showcase every feature).
 """
 import os
 
@@ -609,6 +610,263 @@ def metrics_cli(args=None):
     _print_metrics_summary(events, label)
     print("\nFor real transcription/intent accuracy, hand-score a sample:")
     print("  python3 talk.py metrics export turns.csv")
+    return 0
+
+
+def _seed_clear_data(uid):
+    """Delete a user's demo *data* (not their account/voice) so re-seeding is
+    clean and idempotent."""
+    import sqlite3
+    conn = sqlite3.connect(config.MEM_DB)
+    for tbl in ("memory_items", "memory_summaries", "short_term_context", "memory_conflicts",
+                "list_items", "alarms", "opportunity_threads", "opportunity_suppressions",
+                "opportunity_log"):
+        try:
+            conn.execute(f"DELETE FROM {tbl} WHERE user_id = ?", (uid,))
+        except Exception:
+            pass
+    conn.commit()
+    conn.close()
+
+
+def _find_user(name):
+    """Resolve a typed name to an existing user, tolerant of case and spacing,
+    so demo data lands on the already-enrolled account instead of creating a
+    duplicate. Returns (user_or_None, candidates). candidates is only populated
+    when the match is ambiguous."""
+    exact = identity_repository.get_user_by_name(name)
+    if exact:
+        return exact, []
+    users = identity_repository.list_users()
+    lname = name.strip().lower()
+    ci = [u for u in users if u["display_name"].strip().lower() == lname]
+    if ci:
+        return ci[0], []
+    partial = [u for u in users
+               if lname in u["display_name"].lower() or u["display_name"].lower() in lname]
+    if len(partial) == 1:
+        return partial[0], []
+    return None, partial
+
+
+def seed_demo_cli(args=None):
+    """Populate ONE user with rich, interconnected data so every feature has
+    something to show in a demo -- recognized greeting, personal facts, a note,
+    episode recall, due reminders, a shopping list, two daily alarms, two
+    corrected facts, a ready proactive follow-up, an FX watch, a news digest,
+    and a birthday. Reuses the real APIs, so the data behaves exactly like data
+    built up through normal use. Lands on an already-enrolled user when the name
+    matches (case/spacing-insensitive), so it UPDATES that account in place.
+
+    Usage:
+      talk.py seed-demo [NAME]        seed (default NAME: Gourav); re-runnable
+      talk.py seed-demo clear [NAME]  remove that user and all their data
+    """
+    import datetime
+    import sqlite3
+    import time as _time
+    from .proactive import opportunity_repository as orepo
+    from .proactive import state_store
+    from .skills import utilities, watches
+
+    bootstrap()
+    args = list(args or [])
+
+    if args and args[0] == "clear":
+        name = " ".join(args[1:]).strip() or "Gourav"
+        user, _cands = _find_user(name)
+        if not user:
+            print(f"No user matching {name!r}.")
+            return 0
+        _seed_clear_data(user["id"])
+        identity_repository.delete_user(user["id"])
+        print(f"Removed {user['display_name']!r} and all their data.")
+        return 0
+
+    name = " ".join(args).strip() or "Gourav"
+    online = embed("ping") is not None
+
+    matched, candidates = _find_user(name)
+    if matched:
+        uid, name = matched["id"], matched["display_name"]
+        print(f"Updating existing user {name!r} (id={uid}) -- demo data is attached to this account.")
+    elif candidates:
+        print(f"Ambiguous: more than one user matches {name!r}:")
+        for u in candidates:
+            print(f"  - {u['display_name']} (id={u['id']})")
+        print('Re-run with the exact name, e.g.  python3 talk.py seed-demo "Gourav Pareek"')
+        return 1
+    else:
+        uid = identity_repository.create_user(name)
+        print(f"Created new user {name!r} (id={uid}).")
+        print(f"  NOTE: no voice yet -- run `python3 talk.py enroll {name}` so the mic recognizes you,")
+        print(f"        or demo over text with `python3 talk.py --text \"...\"`.")
+
+    first = name.split()[0]
+    print(f"  (clearing this user's existing notes/lists/alarms/threads, then installing the demo set)")
+    _seed_clear_data(uid)   # fresh, curated set each run
+
+    today = datetime.date.today()
+    today_iso = today.isoformat()
+    tomorrow_iso = (today + datetime.timedelta(days=1)).isoformat()
+    done = []
+
+    def step(label, fn):
+        try:
+            fn()
+            done.append(label)
+        except Exception as exc:
+            print(f"  ! {label} failed: {type(exc).__name__}: {exc}")
+
+    # Personal facts (slotted -> recall + personalization + "what do you know about me").
+    def facts():
+        for text, slot in (
+            (f"{first}'s full name is {name}", "name"),
+            (f"{first}'s favourite food is biryani", "favorite_food"),
+            (f"{first}'s favourite colour is teal", "favorite_color"),
+            (f"{first} is vegetarian", "dietary_pref"),
+            (f"{first} is allergic to peanuts", "allergy"),
+        ):
+            memory_notes.remember_note(text, user_id=uid, attribute=slot, source="explicit", confidence=1.0)
+        for text in (f"{first} has a dog named Rex",
+                     f"{first} plays the guitar on weekends",
+                     f"{first} enjoys hiking in the hills",
+                     f"{first} prefers tea over coffee",
+                     f"{first}'s sister is named Priya",
+                     f"{first}'s wedding anniversary is on the 12th of June",
+                     f"{first} commutes by metro to Cyber City"):
+            memory_notes.remember_note(text, user_id=uid, source="explicit", confidence=1.0)
+    step("personal facts (slots + free-form)", facts)
+
+    # Two corrected facts -> supersede + conflict history ("have I corrected anything").
+    def corrections():
+        for slot, old, new in (
+            ("home_city", f"{first} lives in Delhi", f"{first} lives in Gurgaon"),
+            ("job_title", f"{first} works as a data analyst", f"{first} works as a software engineer at Infosys"),
+        ):
+            memory_notes.remember_note(old, user_id=uid, attribute=slot, source="explicit", confidence=1.0)
+            memory_notes.remember_note(new, user_id=uid, attribute=slot, source="explicit", confidence=1.0)
+            memory_notes.log_conflict(uid, slot, old, new, "confirmed")
+    step("corrected facts (home_city, job_title)", corrections)
+
+    # A free-form 'remember that...' note.
+    step("a saved note (spare key)", lambda: memory_notes.remember_note(
+        "the spare house key is under the flower pot by the door", user_id=uid, source="explicit", confidence=1.0))
+
+    # Episode summaries (cross-session 'what did we talk about').
+    def episodes():
+        for text in (
+            f"Earlier this week {first} and the companion discussed planning a trip to Manali, "
+            f"including the best months to visit.",
+            f"Yesterday {first} practised a few trivia questions about world capitals and got most right.",
+            f"Last weekend {first} asked for a quick biryani recipe and the companion suggested one."):
+            memory_notes.remember_episode(uid, text)
+    step("episode summaries", episodes)
+
+    # Short-term context (survives sleep/wake).
+    def short_term():
+        for role, content in (("user", "what is the capital of Japan"), ("companion", "Tokyo."),
+                              ("user", "remember I like window seats on flights"),
+                              ("companion", "Noted -- you prefer window seats."),
+                              ("user", "how far is the moon"), ("companion", "About 384,000 kilometres.")):
+            memory_notes.append_turn(uid, role, content)
+    step("short-term context", short_term)
+
+    # Reminders: one due today (surfaces on greeting) and one due tomorrow.
+    def reminders():
+        memory_notes.remember_note("call the dentist to confirm tomorrow's appointment",
+                                   user_id=uid, due_date=today_iso, source="explicit")
+        memory_notes.remember_note("pick up the dry cleaning",
+                                   user_id=uid, due_date=tomorrow_iso, source="explicit")
+    step("due reminders (today + tomorrow)", reminders)
+
+    # Shopping list.
+    def shopping():
+        lists_skill.clear_list(uid)
+        for item in ("milk", "eggs", "bread", "coffee filters", "bananas"):
+            lists_skill.add_item(uid, item)
+    step("shopping list", shopping)
+
+    # Two recurring daily alarms.
+    def alarms_seed():
+        alarms_skill.add_alarm(uid, 7, 0, "morning workout")
+        alarms_skill.add_alarm(uid, 22, 0, "take medication")
+    step("daily alarms (07:00, 22:00)", alarms_seed)
+
+    # A proactive opportunity that's READY to act -> surfaced when they return.
+    def opportunity():
+        orepo.open_thread(uid, "travel_planning", "Planning a trip to Manali",
+                          {"destination": "Manali"}, "Which month are you planning to go?")
+        thread = orepo.get_open_thread(uid)
+        if thread:
+            orepo.update_thread(
+                thread["id"], "ready_to_act",
+                final_message=("About your Manali trip -- mid-March to May has the clearest weather. "
+                               "Want me to set a packing reminder the week before you leave?"))
+            orepo.log_decision(uid, "travel_planning", "opened")
+            orepo.log_decision(uid, "travel_planning", "ready")
+    step("ready proactive follow-up (Manali trip)", opportunity)
+
+    # An FX watch (best effort -- needs the network to read the current rate).
+    step("FX watch (USD->INR @ 88)", lambda: watches.create_watch("USD", "INR", 88.0, user_id=uid))
+
+    # Enable the daily news digest (global flag).
+    step("news digest enabled", lambda: state_store.set("news_digest_enabled", True))
+
+    # Birthday = today, so it can wish them (needs PROACTIVE_ENABLED to fire on its own).
+    step("birthday (today)", lambda: identity_repository.set_pref(uid, "birthday", today.strftime("%m-%d")))
+
+    # Transcript lines so 'summarise our chat' / history has material.
+    def transcript():
+        for q, a in (("what's the weather like", "It's sunny and about 24 degrees."),
+                     ("tell me a joke", "Why did the scarecrow win an award? He was outstanding in his field."),
+                     ("what is twelve times eight", "Ninety six."),
+                     ("what's the time", "It's a quarter past four.")):
+            utilities.log_turn(q, a)
+    step("transcript lines", transcript)
+
+    # Make this a 'welcome back' by backdating last-seen beyond WELCOME_BACK_SECONDS.
+    def welcome_back():
+        conn = sqlite3.connect(config.IDENTITY_DB)
+        conn.execute("UPDATE users SET last_active_ts = ? WHERE id = ?",
+                     (_time.time() - (config.WELCOME_BACK_SECONDS + 3600), uid))
+        conn.commit()
+        conn.close()
+    step("backdate last-seen (welcome-back)", welcome_back)
+
+    print(f"\nSeeded {len(done)} data sets onto {name!r}:")
+    for d in done:
+        print(f"  - {d}")
+    if not online:
+        print("\n  (Ollama was unreachable, so facts were stored WITHOUT embeddings -- semantic recall")
+        print("   will fall back to keyword matching. Re-run with Ollama up for best recall.)")
+
+    print("\n--- DEMO SCRIPT (say these to show each feature) ---")
+    for say, shows in (
+        ('"hi companion"', f'wakes + "Welcome back, {first}!" + the due dentist reminder (+ Manali follow-up if live)'),
+        ('"what is my favourite food?"', "fact recall -> biryani"),
+        ('"what am I allergic to?"', "fact recall -> peanuts"),
+        ('"where do I live?"', "recall -> Gurgaon"),
+        ('"what is my sister\'s name?"', "recall -> Priya"),
+        ('"what do you know about me?"', "fact report (name, job, diet, hobbies, pet...)"),
+        ('"what did we talk about earlier?"', "episode recall -> Manali / capitals / biryani recipe"),
+        ('"where is the spare key?"', "saved note -> under the flower pot"),
+        ('"what\'s on my shopping list?"', "list -> milk, eggs, bread, coffee filters, bananas"),
+        ('"what alarms do I have?"', "alarms -> 07:00 workout, 22:00 medication"),
+        ('"have I corrected anything?"', "conflict report -> Delhi->Gurgaon, analyst->engineer"),
+        ('"what\'s the weather?"', "live data, personalised to Gurgaon"),
+        ('"summarise our chat"', "conversation summary from the transcript"),
+        ('"good morning"', "morning macro: date + weather + a joke"),
+        ('"I live in Mumbai now"', "live auto fact-capture + correction (watch home_city update)"),
+        ('"when is my birthday?"', "birthday -> today"),
+    ):
+        print(f"  {say:<34} -> {shows}")
+
+    print("\nTips for the fullest demo:")
+    print(f"  - Voice recognition needs enrollment:  python3 talk.py enroll \"{name}\"")
+    print("  - To let proactive nudges (birthday, Manali follow-up, news) SPEAK, set in config.py:")
+    print("      OPPORTUNITY_LIVE_CATEGORIES = [\"travel_planning\"]   and   PROACTIVE_ENABLED = True")
+    print(f"  - Reset everything afterwards:  python3 talk.py seed-demo clear \"{name}\"")
     return 0
 
 
