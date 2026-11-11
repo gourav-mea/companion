@@ -28,9 +28,9 @@ RECORD_SECONDS = 6
 DENOISE = "highpass=f=200,lowpass=f=3000"
 MAX_RECORD_SECONDS = 10
 SILENCE_STOP = True
-SILENCE_SECS = 1.2             # trailing quiet before a recording ends. 0.6 cut people off
-                               # mid-sentence on natural thinking pauses; this trades a little
-                               # latency for not truncating questions.
+SILENCE_SECS = 0.8             # trailing quiet before a recording ends. Lowered 1.2 -> 0.8 to shave
+                               # ~0.4s of dead time off every turn; 0.6 cut people off mid-sentence
+                               # on natural thinking pauses, so 0.8 is the balance. Raise if it clips you.
 SILENCE_THRESH = "2%"
 WHISPER_THREADS = 4
 
@@ -59,7 +59,7 @@ CONTINUATION_DANGLING_WORDS = (
 # every question (the single biggest per-turn latency cost). Off by default
 # -- needs `whisper-server` built and running first (see deploy/). Falls back
 # to the whisper-cli subprocess automatically if the server isn't reachable.
-WHISPER_SERVER_ENABLED = False
+WHISPER_SERVER_ENABLED = True
 WHISPER_SERVER_HOST = "127.0.0.1"
 WHISPER_SERVER_MAIN_PORT = 8180   # serves WHISPER_MODEL (base.en)
 WHISPER_SERVER_WAKE_PORT = 8181   # serves WHISPER_WAKE_MODEL (tiny.en)
@@ -209,7 +209,7 @@ WHISPER_MODEL = os.path.join(HOME, "whisper.cpp", "models", "ggml-base.en.bin")
 WHISPER_WAKE_MODEL = os.path.join(HOME, "whisper.cpp", "models", "ggml-tiny.en.bin")
 
 PIPER_BIN = os.path.join(HOME, "piper", "piper")
-PIPER_MODEL = os.path.join(WORK, "voices", "en_US-amy-medium.onnx")
+PIPER_MODEL = os.path.join(WORK, "voices", "en_US-amy-low.onnx")   # 'low' synthesizes much faster on Pi CPU than 'medium'
 ESPEAK_VOICE = "en-us+f3"
 ESPEAK_RATE = "150"
 AUDIO_OUT = "auto"          # "auto" | "pulse" | "alsa"
