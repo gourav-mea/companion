@@ -720,37 +720,55 @@ def seed_demo_cli(args=None):
 
     # Personal facts (slotted -> recall + personalization + "what do you know about me").
     def facts():
-        for text, slot in (
-            (f"{first}'s full name is {name}", "name"),
-            (f"{first}'s favourite food is biryani", "favorite_food"),
-            (f"{first}'s favourite colour is teal", "favorite_color"),
-            (f"{first} is vegetarian", "dietary_pref"),
-            (f"{first} is allergic to peanuts", "allergy"),
+        # Slotted facts (one graph branch each). favorite_food/colour are seeded
+        # via corrections() below so they show an old->new trail.
+        for text, slot, src in (
+            (f"{first}'s full name is {name}", "name", "explicit"),
+            (f"{first} is vegetarian", "dietary_pref", "explicit"),
+            (f"{first} is allergic to peanuts", "allergy", "explicit"),
+            (f"{first}'s favourite movie is Interstellar", "favorite_movie", "auto"),
+            (f"{first}'s favourite sport is cricket", "favorite_sport", "auto"),
+            (f"{first} drives a blue Hyundai Creta", "car", "auto"),
+            (f"{first} is on the AI platform team at work", "work_team", "explicit"),
+            (f"{first}'s blood group is O positive", "blood_group", "explicit"),
+            (f"{first} speaks Hindi and English", "languages", "auto"),
         ):
-            memory_notes.remember_note(text, user_id=uid, attribute=slot, source="explicit", confidence=1.0)
-        # Mix explicit ("told me") vs auto ("learned on its own") so the Insights
-        # knowledge graph shows both node colours.
+            memory_notes.remember_note(text, user_id=uid, attribute=slot, source=src,
+                                       confidence=1.0 if src == "explicit" else 0.8)
+        # Free-form traits (the graph's "traits" cluster). Mix explicit ("told
+        # me") vs auto ("learned on its own") so both node colours appear.
         for text, src in ((f"{first} has a dog named Rex", "explicit"),
                           (f"{first} plays the guitar on weekends", "explicit"),
                           (f"{first} enjoys hiking in the hills", "auto"),
                           (f"{first} prefers tea over coffee", "auto"),
                           (f"{first}'s sister is named Priya", "explicit"),
                           (f"{first}'s wedding anniversary is on the 12th of June", "auto"),
-                          (f"{first} commutes by metro to Cyber City", "auto")):
+                          (f"{first} commutes by metro to Cyber City", "auto"),
+                          (f"{first} is training for a half marathon", "auto"),
+                          (f"{first} is learning to cook Italian food", "auto"),
+                          (f"{first} volunteers at an animal shelter on Sundays", "explicit"),
+                          (f"{first} is an early riser", "auto"),
+                          (f"{first} is saving up for a trip to Japan", "auto")):
             memory_notes.remember_note(text, user_id=uid, source=src,
                                        confidence=1.0 if src == "explicit" else 0.8)
     step("personal facts (slots + free-form)", facts)
 
-    # Two corrected facts -> supersede + conflict history ("have I corrected anything").
+    # Corrected facts -> supersede + conflict history ("have I corrected anything"),
+    # and the faded old->new trails that make the graph's learning visible.
     def corrections():
-        for slot, old, new in (
-            ("home_city", f"{first} lives in Delhi", f"{first} lives in Gurgaon"),
-            ("job_title", f"{first} works as a data analyst", f"{first} works as a software engineer at Infosys"),
+        for slot, old, new, src in (
+            ("home_city", f"{first} lives in Delhi", f"{first} lives in Gurgaon", "explicit"),
+            ("job_title", f"{first} works as a data analyst",
+             f"{first} works as a software engineer at Infosys", "explicit"),
+            ("favorite_food", f"{first}'s favourite food is pizza",
+             f"{first}'s favourite food is biryani", "auto"),
+            ("favorite_color", f"{first}'s favourite colour is blue",
+             f"{first}'s favourite colour is teal", "explicit"),
         ):
-            memory_notes.remember_note(old, user_id=uid, attribute=slot, source="explicit", confidence=1.0)
-            memory_notes.remember_note(new, user_id=uid, attribute=slot, source="explicit", confidence=1.0)
+            memory_notes.remember_note(old, user_id=uid, attribute=slot, source=src, confidence=1.0)
+            memory_notes.remember_note(new, user_id=uid, attribute=slot, source=src, confidence=1.0)
             memory_notes.log_conflict(uid, slot, old, new, "confirmed")
-    step("corrected facts (home_city, job_title)", corrections)
+    step("corrected facts (4 slots)", corrections)
 
     # A free-form 'remember that...' note.
     step("a saved note (spare key)", lambda: memory_notes.remember_note(
@@ -762,7 +780,10 @@ def seed_demo_cli(args=None):
             f"Earlier this week {first} and the companion discussed planning a trip to Manali, "
             f"including the best months to visit.",
             f"Yesterday {first} practised a few trivia questions about world capitals and got most right.",
-            f"Last weekend {first} asked for a quick biryani recipe and the companion suggested one."):
+            f"Last weekend {first} asked for a quick biryani recipe and the companion suggested one.",
+            f"{first} talked about training for a half marathon and asked for a weekly running plan.",
+            f"The companion helped {first} draft a birthday message for his sister Priya.",
+            f"{first} asked about the best time to visit Japan and the visa requirements."):
             memory_notes.remember_episode(uid, text)
     step("episode summaries", episodes)
 
