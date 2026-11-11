@@ -221,7 +221,9 @@ APLAY_DEVICE = ""
 # NOT been verified against a real Piper build. Only takes effect when
 # BARGE_IN_ENABLED is False (barge-in needs the per-sentence speak() check
 # this bypasses). Test carefully before relying on it.
-PIPER_REUSE_PROCESS = False
+PIPER_REUSE_PROCESS = True   # reuse one Piper process per answer (no voice change; cuts per-sentence
+                             # spawn cost). Experimental: if speech now starts LATER, your Piper buffers
+                             # until EOF -- set back to False.
 
 # ---- accessibility --------------------------------------------------------------
 CONFIRM_RMS_THRESHOLD = 450
@@ -317,7 +319,7 @@ FACT_CAPTURE_CUES = (
 # could use a reminder, plans that could use a clarifying question + advice)
 # via an LLM judgment call, not per-scenario rules. See proactive/opportunity_*.
 OPPORTUNITY_ENABLED = True
-OPPORTUNITY_SHADOW_MODE = True     # log what it WOULD suggest, don't speak it -- flip off after reviewing
+OPPORTUNITY_SHADOW_MODE = False    # every detected opportunity may speak (demo), not just the live list
 OPPORTUNITY_MODEL = "qwen2.5:3b"   # heavier model, used ONLY for the rare "new opportunity" judgment
 OPPORTUNITY_MODEL_KEEP_ALIVE = "2m"  # stay resident briefly -- detect() makes 3 back-to-back calls
                                    # (self-consistency voting); "0" forced a cold reload every single
