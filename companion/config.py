@@ -209,7 +209,7 @@ WHISPER_MODEL = os.path.join(HOME, "whisper.cpp", "models", "ggml-base.en.bin")
 WHISPER_WAKE_MODEL = os.path.join(HOME, "whisper.cpp", "models", "ggml-tiny.en.bin")
 
 PIPER_BIN = os.path.join(HOME, "piper", "piper")
-PIPER_MODEL = os.path.join(WORK, "voices", "en_US-amy-low.onnx")   # 'low' synthesizes much faster on Pi CPU than 'medium'
+PIPER_MODEL = os.path.join(WORK, "voices", "en_US-amy-medium.onnx")   # 'medium' = nicer voice (slower synth than 'low')
 ESPEAK_VOICE = "en-us+f3"
 ESPEAK_RATE = "150"
 AUDIO_OUT = "auto"          # "auto" | "pulse" | "alsa"
@@ -280,7 +280,7 @@ ADMIN_SESSION_SECONDS = 3600
 ADMIN_INSIGHTS_ENABLED = True
 
 # ---- proactive behaviour ------------------------------------------------------
-PROACTIVE_ENABLED = False        # off by default -- this is new unprompted speech
+PROACTIVE_ENABLED = True         # proactive nudges/briefings may speak (demo)
 PROACTIVE_POLL_SECONDS = 60      # how often the scheduler thread wakes up
 PROACTIVE_QUIET_HOURS = (22, 7)  # (start, end) local hour, wraps past midnight
 PROACTIVE_MAX_PER_HOUR = 4       # global cap across every trigger combined
@@ -333,7 +333,8 @@ OPPORTUNITY_THREAD_TTL_SECONDS = 3600       # abandon an open thread if it goes 
 # Per-category opt-in to actually SPEAK. A category here goes live even while
 # OPPORTUNITY_SHADOW_MODE stays True (everything else keeps shadow-logging). Add
 # one only after `talk.py eval-opportunities` shows acceptable precision for it.
-OPPORTUNITY_LIVE_CATEGORIES = []     # e.g. ["date_reminder"]
+OPPORTUNITY_LIVE_CATEGORIES = ["travel_planning", "date_reminder"]   # these speak; set
+                                     # OPPORTUNITY_SHADOW_MODE=False to let EVERY category speak
 # Learn from how the user reacts to a spoken nudge: a clear "no/stop/not now"
 # within this window counts as a dismissal; after enough dismissals for a
 # category (within the lookback) auto-suppress it for that user.
