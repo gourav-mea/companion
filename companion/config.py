@@ -320,16 +320,14 @@ FACT_CAPTURE_CUES = (
 # via an LLM judgment call, not per-scenario rules. See proactive/opportunity_*.
 OPPORTUNITY_ENABLED = True
 OPPORTUNITY_SHADOW_MODE = False    # every detected opportunity may speak (demo), not just the live list
-OPPORTUNITY_MODEL = MODEL_PRIMARY   # reuse the warm 1B chat model on the Pi -- a 3B model cold-loading
-                                    # alongside whisper+piper overran the timeout (ReadTimeout). Set a
-                                    # heavier model here only on hardware that can keep it resident.
+OPPORTUNITY_MODEL = "qwen2.5:3b"   # heavier model, used ONLY for the rare "new opportunity" judgment
 OPPORTUNITY_MODEL_KEEP_ALIVE = "2m"  # stay resident briefly -- detect() makes 3 back-to-back calls
                                    # (self-consistency voting); "0" forced a cold reload every single
                                    # vote, which is what was causing read timeouts on the Pi
 OPPORTUNITY_NUM_CTX = 2048           # bigger context window for the few-shot examples
 OPPORTUNITY_VOTES = 3                 # self-consistency voting sample count for the detect() call
 OPPORTUNITY_CONFIDENCE_THRESHOLD = 0.7
-OPPORTUNITY_CALL_TIMEOUT_SECONDS = 90   # headroom for a cold load on Pi CPU
+OPPORTUNITY_CALL_TIMEOUT_SECONDS = 60   # generous -- first vote may need a cold load on Pi CPU
 OPPORTUNITY_QUEUE_MAXSIZE = 3             # bounded background queue; full => drop, never block/pile up
 OPPORTUNITY_THREAD_TTL_SECONDS = 3600       # abandon an open thread if it goes stale this long
 
