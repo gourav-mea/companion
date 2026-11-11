@@ -131,7 +131,7 @@ border-radius:12px;font-size:12px;display:none;z-index:9;}
 <script>
 var lastEg="", egTimer=null, curQ=null, activeBot=null, emptyShown=true;
 function el(id){return document.getElementById(id);}
-function esc(s){return (s||"").replace(/[&<>]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c];});}
+function esc(s){return String(s==null?"":s).replace(/[&<>]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c];});}
 function now(){return new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});}
 function feed(){return el("feed");}
 function scrollDown(){var f=feed();f.scrollTop=f.scrollHeight;}

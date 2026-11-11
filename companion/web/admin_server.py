@@ -267,7 +267,7 @@ fetch("/admin/users/"+uid+"/knowledge",{credentials:"same-origin"}).then(functio
 }).then(function(d){ buildStats(d); buildGraph(d); buildPanels(d); buildTimeline(d); })
   .catch(function(e){ document.getElementById("err").textContent=e.message; });
 
-function esc(s){return (s||"").replace(/[&<>]/g,function(c){
+function esc(s){return String(s==null?"":s).replace(/[&<>]/g,function(c){
   return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c];});}
 function shorten(s,n){s=s||"";return s.length>n?s.slice(0,n-1)+"\\u2026":s;}
 function dt(ts){ if(!ts) return "-"; var d=new Date(ts*1000);
