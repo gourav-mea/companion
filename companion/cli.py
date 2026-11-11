@@ -728,14 +728,17 @@ def seed_demo_cli(args=None):
             (f"{first} is allergic to peanuts", "allergy"),
         ):
             memory_notes.remember_note(text, user_id=uid, attribute=slot, source="explicit", confidence=1.0)
-        for text in (f"{first} has a dog named Rex",
-                     f"{first} plays the guitar on weekends",
-                     f"{first} enjoys hiking in the hills",
-                     f"{first} prefers tea over coffee",
-                     f"{first}'s sister is named Priya",
-                     f"{first}'s wedding anniversary is on the 12th of June",
-                     f"{first} commutes by metro to Cyber City"):
-            memory_notes.remember_note(text, user_id=uid, source="explicit", confidence=1.0)
+        # Mix explicit ("told me") vs auto ("learned on its own") so the Insights
+        # knowledge graph shows both node colours.
+        for text, src in ((f"{first} has a dog named Rex", "explicit"),
+                          (f"{first} plays the guitar on weekends", "explicit"),
+                          (f"{first} enjoys hiking in the hills", "auto"),
+                          (f"{first} prefers tea over coffee", "auto"),
+                          (f"{first}'s sister is named Priya", "explicit"),
+                          (f"{first}'s wedding anniversary is on the 12th of June", "auto"),
+                          (f"{first} commutes by metro to Cyber City", "auto")):
+            memory_notes.remember_note(text, user_id=uid, source=src,
+                                       confidence=1.0 if src == "explicit" else 0.8)
     step("personal facts (slots + free-form)", facts)
 
     # Two corrected facts -> supersede + conflict history ("have I corrected anything").
@@ -861,6 +864,11 @@ def seed_demo_cli(args=None):
         ('"when is my birthday?"', "birthday -> today"),
     ):
         print(f"  {say:<34} -> {shows}")
+
+    print("\nAdmin Insights (open in a browser on the same network):")
+    print(f"  http://<pi-ip>:{config.ADMIN_PORT}/admin  ->  log in  ->  click 'Insights' on {name}")
+    print("  shows the knowledge graph (facts by slot, explicit vs auto, corrections) +")
+    print("  a learning timeline of how the agent's understanding evolved.")
 
     print("\nTips for the fullest demo:")
     print(f"  - Voice recognition needs enrollment:  python3 talk.py enroll \"{name}\"")

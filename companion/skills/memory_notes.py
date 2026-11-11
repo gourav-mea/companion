@@ -135,6 +135,28 @@ class SQLiteMemoryStore:
         conn.close()
         return [r["content"] for r in rows]
 
+    def knowledge_snapshot(self, user_id):
+        """Everything the agent has learned about a user, for the admin Insights
+        view: all facts (active + superseded, with slot/source/confidence/when),
+        the correction history, and the episode/compaction summaries. Read-only."""
+        conn = _connect()
+        facts = []
+        for r in conn.execute(
+                "SELECT id, content, attribute, source, confidence, created_ts, last_accessed_ts, "
+                "superseded_by FROM memory_items WHERE user_id IS ? AND type != 'reminder' "
+                "ORDER BY created_ts ASC", (user_id,)).fetchall():
+            d = dict(r)
+            d["active"] = d.pop("superseded_by") is None
+            facts.append(d)
+        conflicts = [dict(r) for r in conn.execute(
+            "SELECT attribute, old_text, new_text, resolution, created_ts FROM memory_conflicts "
+            "WHERE user_id IS ? ORDER BY created_ts ASC", (user_id,)).fetchall()]
+        episodes = [dict(r) for r in conn.execute(
+            "SELECT summary_text, kind, created_ts FROM memory_summaries WHERE user_id IS ? "
+            "ORDER BY created_ts ASC", (user_id,)).fetchall()]
+        conn.close()
+        return {"facts": facts, "conflicts": conflicts, "episodes": episodes}
+
     def forget_fact(self, user_id, hint):
         """Retract the best lexical match among this user's active facts."""
         conn = _connect()
@@ -380,4 +402,5 @@ conflict_history = store.conflict_history
 facts_for_user = store.facts_for_user
 forget_fact = store.forget_fact
 maybe_capture_fact = store.maybe_capture_fact
+knowledge_snapshot = store.knowledge_snapshot
 

@@ -508,6 +508,7 @@ def _conversation_loop(transcript, stats):
                 print(f"  [time] answer {time.time() - _t:.1f}s")
             question = current_question   # so the bookkeeping below reflects what was actually answered
             state.last_answer = answer
+            state.last_latency_ms = turn.first_word_ms or 0   # surfaced live on the face
             metrics.log_turn(
                 heard=current_question, answer=answer, kind=kind,
                 rms=int(rms), asr_ms=asr_ms, first_word_ms=turn.first_word_ms,

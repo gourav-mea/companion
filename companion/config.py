@@ -273,6 +273,11 @@ IDENTITY_DB = os.path.join(WORK, "identity.db")
 ADMIN_PORT = 8081
 ADMIN_PASSWORD_FILE = os.path.join(WORK, "admin_password.txt")
 ADMIN_SESSION_SECONDS = 3600
+# Admin "Insights": a per-user knowledge graph + learning timeline of what the
+# agent has learned about someone. This intentionally RELAXES the normal admin
+# boundary (which is account-metadata only, never content) -- so it is a flag.
+# On for the demo; turn off to restore "admins manage accounts, not content".
+ADMIN_INSIGHTS_ENABLED = True
 
 # ---- proactive behaviour ------------------------------------------------------
 PROACTIVE_ENABLED = False        # off by default -- this is new unprompted speech

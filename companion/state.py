@@ -43,6 +43,8 @@ last_answer = ""
 current_user = None
 # Cosine similarity from the most recent speaker-ID attempt, for diagnostics.
 last_match_score = 0.0
+# Time-to-first-word (ms) of the most recent answered turn, surfaced on the face.
+last_latency_ms = 0
 # A memory-confirmation question ready to be spoken at the next safe gap
 # (set by a background fact-capture thread, never spoken from that thread
 # directly -- avoids talking over/under a recording in progress).
