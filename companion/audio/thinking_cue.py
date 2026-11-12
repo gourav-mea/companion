@@ -71,11 +71,19 @@ def _earcon_path():
 
 def _phrase_path(text, lang):
     """Cached WAV for a spoken cue phrase, rendered once per (lang, text)."""
-    key = hashlib.md5(f"{lang}:{text}".encode("utf-8")).hexdigest()[:10]
+    # The voice is part of the key so switching voice (low <-> medium) re-renders
+    # the clips instead of replaying ones recorded in the previous voice.
+    try:
+        voice = os.path.basename(accessibility.piper_model_for_lang())
+    except Exception:
+        voice = ""
+    key = hashlib.md5(f"{lang}:{voice}:{text}".encode("utf-8")).hexdigest()[:10]
     path = os.path.join(config.WORK, f"cue_{lang}_{key}.wav")
     if os.path.exists(path) and os.path.getsize(path) > 0:
         return path
-    return playback.render_to_wav(text, path)
+    # Piper only: if it can't render, the earcon alone is the cue -- a filler line in
+    # the robotic espeak voice is exactly the "second voice" we must never play.
+    return playback.render_to_wav(text, path, allow_espeak=False)
 
 
 def prewarm():

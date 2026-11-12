@@ -37,6 +37,20 @@ def run_followup(followup):
         if not hits:
             return "I could not find anything relevant there after all."
         return policy_qa.answer_policy(question, hits)
+    if kind == "memory_facts_more":
+        from .. import config, state
+        from . import memory_notes
+        facts = memory_notes.ranked_facts(followup["user_id"])
+        start = followup.get("offset", 0)
+        chunk = facts[start:start + config.FACT_REPORT_CHUNK]
+        if not chunk:
+            return "That's everything I know."
+        end = start + len(chunk)
+        if end < len(facts):   # still more: arm the next page, same as the first offer
+            state.pending_followup = {"kind": "memory_facts_more", "interactive": True,
+                                      "user_id": followup["user_id"], "offset": end}
+            return "; ".join(chunk) + ". Want to hear more?"
+        return "; ".join(chunk) + ". That's everything."
     if kind == "confirm_memory_update":
         from . import memory_notes
         # Nothing was written when the question was first asked -- the

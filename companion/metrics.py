@@ -70,6 +70,13 @@ def log_turn(**fields):
     _append(fields)
 
 
+def log_tts_issue(kind, reason=""):
+    """A voice problem worth knowing about. kind 'fallback' = the robotic espeak
+    voice was used because Piper failed before producing any audio; kind 'cutoff'
+    = an utterance was stopped mid-playback (it is NOT repeated in another voice)."""
+    _append({"event": "tts_issue", "kind": kind, "reason": str(reason)[:200]})
+
+
 def log_session(answered, duration_s=None):
     _append({"event": "session", "answered": int(answered),
              "duration_s": None if duration_s is None else round(duration_s, 1)})

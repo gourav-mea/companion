@@ -224,6 +224,13 @@ APLAY_DEVICE = ""
 PIPER_REUSE_PROCESS = True   # reuse one Piper process per answer (no voice change; cuts per-sentence
                              # spawn cost). Experimental: if speech now starts LATER, your Piper buffers
                              # until EOF -- set back to False.
+# How long one spoken answer may keep playing before it is cut off. A floor plus a
+# per-word allowance (scaled by the speech-rate setting), so a long answer is never
+# mistaken for a hung player. A fixed 30 s used to cut long answers off and then
+# repeat them in the espeak voice on top of the Piper voice that was still talking.
+TTS_MIN_WAIT_SECONDS = 60
+TTS_SECONDS_PER_WORD = 0.6      # normal speech is ~0.4 s/word; this leaves headroom
+FACT_REPORT_CHUNK = 6           # facts spoken per "what do you know about me" turn
 
 # ---- accessibility --------------------------------------------------------------
 CONFIRM_RMS_THRESHOLD = 450

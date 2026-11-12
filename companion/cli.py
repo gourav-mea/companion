@@ -405,6 +405,113 @@ def smoke_memory():
         except OSError:
             pass
 
+    # 10) Voice: a long or interrupted utterance must never be repeated in the espeak
+    #     voice (the "two voices at once" bug). Runs against fake processes -- no audio.
+    import contextlib
+    import io
+    import subprocess
+    import types
+    from .audio import playback
+
+    class _Stream:
+        def __init__(self, broken=False):
+            self.broken = broken
+
+        def write(self, _data):
+            if self.broken:
+                raise BrokenPipeError("piper exited")
+
+        def close(self):
+            pass
+
+    class _Proc:
+        """Stands in for a Piper/player process: `hang` = keeps running until it is
+        terminated; `exit_code` = what it reports once it has exited."""
+        def __init__(self, hang, exit_code=0, broken_stdin=False):
+            self.stdin, self.stdout = _Stream(broken_stdin), _Stream()
+            self.hang, self.exit_code, self.stopped = hang, exit_code, False
+
+        def poll(self):
+            return None if (self.hang and not self.stopped) else self.exit_code
+
+        def wait(self, timeout=None):
+            if self.hang and not self.stopped:
+                raise subprocess.TimeoutExpired("fake", timeout or 0)
+            return self.exit_code
+
+        def terminate(self):
+            self.stopped = True
+
+        kill = terminate
+
+    def run_speak(piper_hangs, player_hangs, piper_exit=0, broken_stdin=False):
+        """Run playback._speak_once against fake processes; returns (procs, espeak_runs)."""
+        procs, espeak_runs = [], []
+
+        def popen(cmd, **kw):
+            is_piper = kw.get("stdin") is fake_sub.PIPE
+            p = _Proc(hang=piper_hangs if is_piper else player_hangs,
+                      exit_code=piper_exit if is_piper else 0,
+                      broken_stdin=broken_stdin and is_piper)
+            procs.append(p)
+            return p
+
+        def run(cmd, **kw):
+            if cmd and cmd[0] == "espeak-ng":
+                espeak_runs.append(cmd)
+            return types.SimpleNamespace(returncode=0)
+
+        fake_sub = types.SimpleNamespace(Popen=popen, run=run, PIPE=object(),
+                                         TimeoutExpired=subprocess.TimeoutExpired)
+        saved = (playback.subprocess, playback.piper_ready,
+                 config.BARGE_IN_ENABLED, config.METRICS_ENABLED)
+        playback.subprocess, playback.piper_ready = fake_sub, (lambda: "/fake/piper")
+        config.BARGE_IN_ENABLED = config.METRICS_ENABLED = False
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                playback._speak_once("a long answer " * 50)
+        finally:
+            (playback.subprocess, playback.piper_ready,
+             config.BARGE_IN_ENABLED, config.METRICS_ENABLED) = saved
+        return procs, espeak_runs
+
+    procs, espeak_runs = run_speak(piper_hangs=True, player_hangs=True)
+    check("a playback that overruns is stopped, not repeated in the espeak voice",
+          not espeak_runs and bool(procs) and all(p.stopped for p in procs))
+    procs, espeak_runs = run_speak(piper_hangs=False, player_hangs=False)
+    check("a normal utterance is spoken once, with no espeak", not espeak_runs)
+    procs, espeak_runs = run_speak(piper_hangs=False, player_hangs=False,
+                                   piper_exit=1, broken_stdin=True)
+    check("Piper crashing before any audio still falls back to espeak once",
+          len(espeak_runs) == 1)
+    check("a long answer gets more than the old fixed 30 s to play",
+          playback._budget_seconds(200) > 30)
+
+    # 11) "What do you know about me" speaks a short chunk and offers the rest.
+    from .intents.fact_report_cmd import WhatDoYouKnowIntent
+    from .skills import macros as _macros
+    for extra in ("Gourav owns a red bicycle", "Gourav speaks fluent French",
+                  "Gourav collects vintage postcards", "Gourav is afraid of heights",
+                  "Gourav bakes sourdough bread", "Gourav supports a football club in Spain",
+                  "Gourav has visited Kyoto twice", "Gourav studied mechanical engineering"):
+        memory_notes.remember_note(extra, user_id=uid, source="explicit")
+    intent = WhatDoYouKnowIntent()
+    ctx = types.SimpleNamespace(speaker={"id": uid, "display_name": "Smoke"})
+    state.pending_followup = None
+    reply = intent.handle("what do you know about me", "what do you know about me", ctx).payload
+    offered = state.pending_followup
+    more = _macros.run_followup(offered) if offered else ""
+    state.pending_followup = None
+    check("a long fact report is spoken as a short chunk with an offer for more",
+          "Want to hear more" in reply and len(reply.split()) < 80
+          and bool(offered) and offered.get("kind") == "memory_facts_more")
+    check("saying yes speaks the next facts instead of repeating the first",
+          bool(more) and "main ones" not in more)
+    check("natural phrasings reach the fact report",
+          all(intent.matches(q, q, ctx) for q in (
+              "what all info you have about me", "what info do you have about me",
+              "what do you have on me", "tell me everything you know about me")))
+
     _wipe_smoke_user(uid)
     state.pending_opportunity_feedback = None
 
@@ -525,6 +632,14 @@ def _print_metrics_summary(events, label):
     print(f"  needed a confirmation (low confidence): {share([e for e in answered if e.get('low_conf')])}")
     print(f"  needed a continuation prompt:           {share([e for e in answered if e.get('continuation')])}")
     print(f"  interrupted mid-answer (barge-in):      {share([e for e in answered if e.get('barge_in')])}")
+
+    # 5) Voice problems -- only shown when there were any.
+    tts_issues = [e for e in events if e.get("event") == "tts_issue"]
+    if tts_issues:
+        fallbacks = sum(1 for e in tts_issues if e.get("kind") == "fallback")
+        print("\nVOICE")
+        print(f"  espeak (robotic) fallbacks: {fallbacks}   "
+              f"utterances cut off mid-playback: {len(tts_issues) - fallbacks}")
 
 
 def _read_jsonl(path):

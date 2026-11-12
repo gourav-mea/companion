@@ -404,3 +404,13 @@ forget_fact = store.forget_fact
 maybe_capture_fact = store.maybe_capture_fact
 knowledge_snapshot = store.knowledge_snapshot
 
+
+def ranked_facts(user_id):
+    """Active facts as plain sentences, most identity-defining first: slotted facts
+    (name, city, job...) before free-form ones, things the user said before things
+    learned automatically, newest first. Used to speak a long memory in short chunks."""
+    active = [f for f in knowledge_snapshot(user_id)["facts"] if f["active"]]
+    active.sort(key=lambda f: (f["attribute"] is None, f["source"] != "explicit",
+                               -(f["created_ts"] or 0)))
+    return [f["content"] for f in active]
+
