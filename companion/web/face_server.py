@@ -18,6 +18,53 @@ import time
 
 from .. import config, state
 
+# Injected into the served face.html just before </body>. The template source
+# (data/face_html.py) is governed by a content-exclusion policy and can't be
+# edited directly, so the mute button is grafted on at serve time instead. The
+# snippet is fully self-contained (own styles + status.json polling) so it does
+# not depend on any IDs or JS already present in the template.
+_MUTE_BUTTON_HTML = """
+<style>
+#companion-mute-btn{position:fixed;right:16px;bottom:16px;z-index:9999;
+  font:600 15px/1.2 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  padding:12px 18px;border:none;border-radius:999px;cursor:pointer;
+  color:#fff;background:#2563eb;box-shadow:0 2px 10px rgba(0,0,0,.35);
+  transition:background .15s ease,transform .05s ease;}
+#companion-mute-btn:active{transform:scale(.96);}
+#companion-mute-btn.muted{background:#dc2626;}
+</style>
+<button id="companion-mute-btn" type="button" onclick="companionToggleMute()">\U0001F507 Mute</button>
+<script>
+(function(){
+  var muted=false, busy=false;
+  function paint(){
+    var b=document.getElementById('companion-mute-btn');
+    if(!b)return;
+    b.classList.toggle('muted',muted);
+    b.textContent=(muted?'\U0001F508 Unmute':'\U0001F507 Mute');
+  }
+  window.companionToggleMute=function(){
+    if(busy)return; busy=true;
+    fetch('/mute',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({muted:!muted})})
+      .then(function(r){return r.json();})
+      .then(function(d){muted=!!d.muted;paint();})
+      .catch(function(){})
+      .then(function(){busy=false;});
+  };
+  // Keep the button in sync with the device (physical restarts, other tabs)
+  // via the same no-cache status.json the rest of the face already serves.
+  function sync(){
+    fetch('status.json',{cache:'no-store'})
+      .then(function(r){return r.json();})
+      .then(function(s){if(typeof s.muted_ui==='boolean'){muted=s.muted_ui;paint();}})
+      .catch(function(){});
+  }
+  paint(); sync(); setInterval(sync,1500);
+})();
+</script>
+"""
+
 # ---- in-process status broker ------------------------------------------------
 # set_status() bumps a version and wakes every open SSE stream; the streams send
 # the new status immediately. No file polling on the hot path.
@@ -85,9 +132,37 @@ class _FaceHandler(http.server.SimpleHTTPRequestHandler):
         super().end_headers()
 
     def do_GET(self):
-        if self.path.split("?")[0] == "/events":
+        path = self.path.split("?")[0]
+        if path == "/events":
             return self._serve_events()
+        if path in ("/", "/face.html"):
+            return self._serve_face()
         return super().do_GET()
+    def _serve_face(self):
+        """Serve face.html with the mute button grafted in before </body>.
+        Falls back to the plain static file if anything goes wrong so the face
+        never breaks just because the injection did."""
+        try:
+            with open(config.FACE_FILE, "r", encoding="utf-8") as f:
+                html = f.read()
+            marker = "</body>"
+            if marker in html.lower():
+                idx = html.lower().rfind(marker)
+                html = html[:idx] + _MUTE_BUTTON_HTML + html[idx:]
+            else:
+                html += _MUTE_BUTTON_HTML
+            body = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+        except Exception:
+            self.path = "/face.html"
+            return super().do_GET()
 
     def do_POST(self):
         if self.path.split("?")[0] == "/mute":
