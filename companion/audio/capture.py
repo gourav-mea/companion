@@ -111,6 +111,29 @@ def mic_session(timeout=None):
         state.mic_released.clear()
 
 
+def _run_capture(cmd, timeout):
+    """Run a capture subprocess, registering it so an instant mute can kill it.
+
+    Returns (returncode, stderr_bytes). A mute-triggered terminate() just looks
+    like a short/empty recording to the caller, which the listening loops
+    discard once they notice state.ui_muted.
+    """
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except Exception as exc:
+        return 1, str(exc).encode("utf-8", "replace")
+    state.register_capture(proc)
+    try:
+        _out, err = proc.communicate(timeout=timeout)
+        return proc.returncode, err
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        return proc.returncode, b""
+    finally:
+        state.register_capture(None)
+
+
 def record(seconds, denoise=True, tag="input", stop_on_silence=False, keep_raw=False):
     """Record a clip; returns the path, or (denoised, raw) when keep_raw.
 
@@ -134,24 +157,22 @@ def record(seconds, denoise=True, tag="input", stop_on_silence=False, keep_raw=F
     try:
         if stop_on_silence and config.SILENCE_STOP and shutil.which("sox"):
             # Starts when you speak, stops after SILENCE_SECS of quiet, capped at MAX.
-            try:
-                res = subprocess.run(
-                    ["sox", "-q", "-t", "alsa", config.MIC_DEVICE, "-r", "16000", "-c", "1", "-b", "16", raw,
-                     "silence", "1", "0.1", config.SILENCE_THRESH, "1", str(config.SILENCE_SECS), config.SILENCE_THRESH,
-                     "trim", "0", str(config.MAX_RECORD_SECONDS)],
-                    timeout=config.MAX_RECORD_SECONDS + 3, capture_output=True, check=False)
-                used_sox = os.path.exists(raw)
-                if not used_sox and res.stderr:
-                    # A busy capture device looks exactly like silence otherwise.
-                    print("sox capture failed:", res.stderr.decode("utf-8", "replace").strip()[:200])
-            except Exception as exc:
-                print("sox capture failed:", exc)
-                used_sox = False
+            rc, stderr = _run_capture(
+                ["sox", "-q", "-t", "alsa", config.MIC_DEVICE, "-r", "16000", "-c", "1", "-b", "16", raw,
+                 "silence", "1", "0.1", config.SILENCE_THRESH, "1", str(config.SILENCE_SECS), config.SILENCE_THRESH,
+                 "trim", "0", str(config.MAX_RECORD_SECONDS)],
+                timeout=config.MAX_RECORD_SECONDS + 3)
+            used_sox = os.path.exists(raw)
+            if not used_sox and stderr:
+                # A busy capture device looks exactly like silence otherwise.
+                print("sox capture failed:", stderr.decode("utf-8", "replace").strip()[:200])
         if not used_sox:
-            res = subprocess.run(["arecord", "-q", "-D", config.MIC_DEVICE, "-f", "S16_LE", "-r", "16000",
-                                  "-c", "1", "-d", str(seconds), raw], capture_output=True, check=False)
-            if not os.path.exists(raw) and res.stderr:
-                print("arecord capture failed:", res.stderr.decode("utf-8", "replace").strip()[:200])
+            rc, stderr = _run_capture(
+                ["arecord", "-q", "-D", config.MIC_DEVICE, "-f", "S16_LE", "-r", "16000",
+                 "-c", "1", "-d", str(seconds), raw],
+                timeout=seconds + 3)
+            if not os.path.exists(raw) and stderr:
+                print("arecord capture failed:", stderr.decode("utf-8", "replace").strip()[:200])
     finally:
         if state.led:
             state.led.off()

@@ -76,6 +76,32 @@ mic_lock = threading.RLock()
 mic_pause = threading.Event()
 mic_released = threading.Event()
 
+# Handle to the currently running capture subprocess (sox/arecord), so an
+# instant mute can cut a recording short instead of waiting the full duration.
+# Guarded by _capture_lock because record() (a listening loop) and
+# stop_capture() (an HTTP request thread) touch it from different threads.
+capture_proc = None
+_capture_lock = threading.Lock()
+
+
+def register_capture(proc):
+    """record() calls this with its live subprocess (and None when done)."""
+    global capture_proc
+    with _capture_lock:
+        capture_proc = proc
+
+
+def stop_capture():
+    """Terminate any in-progress mic capture at once (used by UI mute) so the
+    listening loop returns immediately instead of finishing the recording."""
+    with _capture_lock:
+        proc = capture_proc
+    if proc is not None:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+
 
 def switch_enabled():
     """True when the mute toggle is ON (hearing). No GPIO -> always enabled."""

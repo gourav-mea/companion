@@ -293,6 +293,17 @@ def _conversation_loop(transcript, stats):
         with capture.mic_session():
             wav, raw_wav = record(config.QUESTION_SECONDS, denoise=True, tag="input",
                                   stop_on_silence=True, keep_raw=True)
+        if state.ui_muted:
+            # Muted mid-recording: stop_capture() cut this clip short, so it is
+            # a partial fragment -- discard it and let the mute branch above
+            # take over on the next pass instead of transcribing noise.
+            for f in (wav, raw_wav):
+                if f and os.path.exists(f):
+                    try:
+                        os.remove(f)
+                    except OSError:
+                        pass
+            continue
         set_status("thinking")
         rms = wav_rms(wav)
         asr_ms = 0                 # per-utterance metrics, reset each round

@@ -111,6 +111,8 @@ def main():
                     state.switch_enabled, drain_reminders, conversation_mode):
                 continue   # openWakeWord handled waking until the toggle went off
             awake, heard = hears_wake()
+            if state.ui_muted:
+                continue   # muted mid-capture: ignore the partial wake snippet
             if heard or awake:   # skip the many silent/energy-gated checks that heard nothing
                 metrics.log_wake(awake, heard, source="whisper")
             if heard:

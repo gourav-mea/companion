@@ -36,31 +36,40 @@ _MUTE_BUTTON_HTML = """
 <button id="companion-mute-btn" type="button" onclick="companionToggleMute()">\U0001F507 Mute</button>
 <script>
 (function(){
-  var muted=false, busy=false;
+  var muted=false, busy=false, lastClick=0;
   function paint(){
     var b=document.getElementById('companion-mute-btn');
     if(!b)return;
     b.classList.toggle('muted',muted);
     b.textContent=(muted?'\U0001F508 Unmute':'\U0001F507 Mute');
   }
+  function apply(m){            // adopt device state unless we just clicked
+    if(Date.now()-lastClick<1500)return;   // grace window: don't fight the user
+    if(typeof m==='boolean' && m!==muted){muted=m;paint();}
+  }
   window.companionToggleMute=function(){
     if(busy)return; busy=true;
+    lastClick=Date.now();
+    muted=!muted; paint();     // optimistic: flip instantly, confirm below
     fetch('/mute',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({muted:!muted})})
+      body:JSON.stringify({muted:muted})})
       .then(function(r){return r.json();})
       .then(function(d){muted=!!d.muted;paint();})
       .catch(function(){})
       .then(function(){busy=false;});
   };
-  // Keep the button in sync with the device (physical restarts, other tabs)
-  // via the same no-cache status.json the rest of the face already serves.
-  function sync(){
+  // Instant sync via the same SSE stream the face uses; poll is just a fallback.
+  try{
+    var es=new EventSource('/events');
+    es.onmessage=function(e){try{apply(JSON.parse(e.data).muted_ui);}catch(x){}};
+  }catch(x){}
+  function poll(){
     fetch('status.json',{cache:'no-store'})
       .then(function(r){return r.json();})
-      .then(function(s){if(typeof s.muted_ui==='boolean'){muted=s.muted_ui;paint();}})
+      .then(function(s){apply(s.muted_ui);})
       .catch(function(){});
   }
-  paint(); sync(); setInterval(sync,1500);
+  paint(); poll(); setInterval(poll,2000);
 })();
 </script>
 """
@@ -180,8 +189,15 @@ class _FaceHandler(http.server.SimpleHTTPRequestHandler):
         except ValueError:
             data = {}
         state.ui_muted = bool(data["muted"]) if "muted" in data else (not state.ui_muted)
-        if state.ui_muted and state.led:
-            state.led.off()   # instant feedback; the next loop pass would do this anyway
+        if state.ui_muted:
+            state.stop_capture()     # cut any in-progress recording short -> instant mute
+            if state.led:
+                state.led.off()      # instant feedback; the loop would also do this
+            set_status("muted")      # push muted_ui now over SSE + status.json (no poll lag)
+        else:
+            # Re-emit the current state so every open page unmutes instantly
+            # instead of waiting for the next poll/real status change.
+            set_status(_status_latest.get("state", "idle"))
         payload = json.dumps({"muted": state.ui_muted}).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
