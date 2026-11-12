@@ -96,7 +96,7 @@ def main():
     try:
         while True:
             drain_reminders()
-            if not state.switch_enabled():
+            if not state.switch_enabled() or state.ui_muted:
                 if state.led:
                     state.led.off()
                 set_status("muted")

@@ -60,6 +60,13 @@ pending_trivia = None
 # so the engine can learn to stop pestering. Consumed/cleared after one turn.
 pending_opportunity_feedback = None
 
+# True when the UI mute button (face.html) has been pressed. Independent of
+# the physical mute_switch GPIO toggle: in sleep/idle mode it behaves like the
+# toggle (no listening, LED off); in an active companion conversation it
+# pauses listening WITHOUT dropping back to sleep (see conversation/session.py)
+# -- the physical toggle, by contrast, always ends the conversation outright.
+ui_muted = False
+
 # ---- microphone ownership ---------------------------------------------------
 # Only one process may hold the ALSA capture device at a time. The wake-word
 # listener streams from it continuously, so anything else needing the mic

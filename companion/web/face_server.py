@@ -48,6 +48,7 @@ def _build_status(state_name, heard, reply, egress):
         "model": model.split(":")[0] if model else "",
         "asr": "server" if config.WHISPER_SERVER_ENABLED else "cli",
         "latency_ms": getattr(state, "last_latency_ms", 0) or 0,
+        "muted_ui": state.ui_muted,
         "time": time.time(),
     }
 
@@ -87,6 +88,32 @@ class _FaceHandler(http.server.SimpleHTTPRequestHandler):
         if self.path.split("?")[0] == "/events":
             return self._serve_events()
         return super().do_GET()
+
+    def do_POST(self):
+        if self.path.split("?")[0] == "/mute":
+            return self._handle_mute()
+        self.send_response(404)
+        self.end_headers()
+
+    def _handle_mute(self):
+        """Toggled by the mute button on face.html. Independent of the
+        physical GPIO switch -- see state.ui_muted for the exact semantics."""
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        body = self.rfile.read(length) if length else b""
+        try:
+            data = json.loads(body) if body else {}
+        except ValueError:
+            data = {}
+        state.ui_muted = bool(data["muted"]) if "muted" in data else (not state.ui_muted)
+        if state.ui_muted and state.led:
+            state.led.off()   # instant feedback; the next loop pass would do this anyway
+        payload = json.dumps({"muted": state.ui_muted}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(payload)
 
     def _serve_events(self):
         try:

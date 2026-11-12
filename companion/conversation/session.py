@@ -280,6 +280,15 @@ def _conversation_loop(transcript, stats):
                 state.led.off()
             set_status("muted")
             return
+        if state.ui_muted:
+            # UI mute during an active conversation: stop listening and turn
+            # the LED off, but -- unlike the physical toggle above -- stay in
+            # companion mode and keep polling until the button is pressed again.
+            if state.led:
+                state.led.off()
+            set_status("muted")
+            time.sleep(0.3)
+            continue
         set_status("listening")
         with capture.mic_session():
             wav, raw_wav = record(config.QUESTION_SECONDS, denoise=True, tag="input",
